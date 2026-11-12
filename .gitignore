@@ -28,7 +28,7 @@ MANIFEST
 
 # PyInstaller
 *.manifest
-*.spec
+/*.spec
 
 # Installer logs
 pip-log.txt
@@ -85,3 +85,12 @@ src/urh/*.txt
 src/urh/URHProject.xml
 src/urh/dev/gr/scripts/top_block.py
 misc/*
+
+# Local Windows build (data/windows/build_windows.ps1)
+build-windows/
+pyinstaller/
+urh_build/
+urh_cli_build/
+urh_debug_build/
+/*.spec
+data/windows/build.log
