@@ -156,7 +156,7 @@ class RfCatPlugin(SDRPlugin):
             if log:
                 logger.debug(param)
         except OSError as e:
-            logger.info("Could not set parameter {0}:{1} ({2})".format(param, e))
+            logger.info("Could not set parameter {0}: {1}".format(param, e))
             return True
         return False
 
