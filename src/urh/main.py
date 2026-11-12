@@ -305,6 +305,11 @@ def main():
 
 if __name__ == "__main__":
     if hasattr(sys, "frozen"):
+        # The device subprocesses are started through freeze_support() and never
+        # reach main(), so they need the dummy streams too: in a --windowed build
+        # sys.stderr is None and any traceback raises "NoneType has no attribute
+        # 'write'" plus an error dialog.
+        fix_windows_stdout_stderr()
         multiprocessing.freeze_support()
 
     main()

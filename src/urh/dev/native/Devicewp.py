@@ -190,7 +190,13 @@ class Devicewp(object):  # Device with parameter
                 except KeyboardInterrupt:
                     pass
             else:
-                cls.receive_sync(data_connection)
+                try:
+                    cls.receive_sync(data_connection)
+                except (EOFError, BrokenPipeError, ConnectionResetError, OSError):
+                    # The GUI closed the data pipe: stop cleanly so the device still gets closed.
+                    logger.debug("Data connection closed during receive")
+                    exit_requested = True
+                    break
             while ctrl_connection.poll():
                 try:
                     result = cls.process_command(
@@ -204,9 +210,17 @@ class Devicewp(object):  # Device with parameter
                     exit_requested = True
                     break
 
-        cls.shutdown_device(ctrl_connection, is_tx=False)
-        data_connection.close()
-        ctrl_connection.close()
+        try:
+            cls.shutdown_device(ctrl_connection, is_tx=False)
+        except (EOFError, BrokenPipeError, ConnectionResetError, OSError):
+            logger.debug(
+                "Control connection closed before device shutdown was reported"
+            )
+        for conn in (data_connection, ctrl_connection):
+            try:
+                conn.close()
+            except OSError:
+                pass
 
     @classmethod
     def device_send(
@@ -273,8 +287,16 @@ class Devicewp(object):  # Device with parameter
         if send_config.sending_is_finished():
             logger.debug("{}: sending is finished.".format(cls.__class__.__name__))
 
-        cls.shutdown_device(ctrl_connection, is_tx=True)
-        ctrl_connection.close()
+        try:
+            cls.shutdown_device(ctrl_connection, is_tx=True)
+        except (EOFError, BrokenPipeError, ConnectionResetError, OSError):
+            logger.debug(
+                "Control connection closed before device shutdown was reported"
+            )
+        try:
+            ctrl_connection.close()
+        except OSError:
+            pass
 
     def __init__(
         self,
