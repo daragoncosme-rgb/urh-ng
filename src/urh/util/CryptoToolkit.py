@@ -3070,10 +3070,14 @@ def vag_decrypt(
         (v0, v1) decrypted
     """
     if vag_type in (1, 3):
-        if sbox is None:
-            sbox = _VAG_DEFAULT_SBOX
-        if pbox is None:
-            pbox = _VAG_DEFAULT_PBOX
+        if sbox is None or pbox is None:
+            # No generic default exists: use the boxes of VAG key set #1
+            # (the same set vag_decode tries first).
+            default = aut64_unpack(VAG_AUT64_KEYS[0])
+            if sbox is None:
+                sbox = default["sbox"]
+            if pbox is None:
+                pbox = default["pbox"]
         block = [
             (encrypted_v0 >> 24) & 0xFF,
             (encrypted_v0 >> 16) & 0xFF,
