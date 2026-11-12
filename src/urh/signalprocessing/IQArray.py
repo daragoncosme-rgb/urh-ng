@@ -277,6 +277,7 @@ class IQArray(object):
     ):
         arr = []
         counter = 0
+        lastvalue = None
 
         for value in self.convert_to(np.uint8):
             # if origin was a sub-file value is uint8, else value is [uint8, uint8]
@@ -286,9 +287,7 @@ class IQArray(object):
                 value = value[0]
 
             # set lastvalue to value for first run
-            try:
-                lastvalue
-            except:
+            if lastvalue is None:
                 lastvalue = value
 
             # increase counter while values do not change
@@ -296,12 +295,14 @@ class IQArray(object):
                 counter += 1
             else:
                 # add number of same value as positive int when value > 127 else as negative int
-                if counter > 1:
-                    arr.append(counter if lastvalue > 127 else -counter)
-                    counter = 1
-                    lastvalue = value
+                # (runs of a single sample are kept too; before, they made the
+                # loop stop tracking value changes and the rest of the signal was lost)
+                arr.append(counter if lastvalue > 127 else -counter)
+                counter = 1
+                lastvalue = value
         # save last value
-        arr.append(counter if lastvalue > 127 else -counter)
+        if counter > 0:
+            arr.append(counter if lastvalue > 127 else -counter)
 
         with open(filename, "w") as subfile:
             subfile.write("Filetype: Flipper SubGhz RAW File\n")
