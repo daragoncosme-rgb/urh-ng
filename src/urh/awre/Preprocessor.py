@@ -35,12 +35,33 @@ class Preprocessor(object):
             # NOTE: This does not cover the case if protocol has multiple sync words and not all of them were labeled
             sync_words = existing_sync_words
 
+        # Sync words of different lengths are possible, e.g. a sync label taken from
+        # an existing message type (PHZ auto-identify) gets cut off in shorter
+        # messages. The rest of the analysis assumes one sync length, so keep the
+        # most common one instead of failing on the assertion below.
+        sync_words = self.keep_most_common_sync_length(sync_words)
+
         preamble_starts = raw_preamble_positions[:, 0]
         preamble_lengths = self.get_preamble_lengths_from_sync_words(
             sync_words, preamble_starts=preamble_starts
         )
         sync_len = len(sync_words[0]) if len(sync_words) > 0 else 0
         return preamble_starts, preamble_lengths, sync_len
+
+    @staticmethod
+    def keep_most_common_sync_length(sync_words: list) -> list:
+        """
+        Drop empty and duplicate sync words and keep only those with the most
+        common length (on a tie, the longer length wins). Order is preserved.
+        """
+        sync_words = [sw for sw in sync_words if len(sw) > 0]
+        if not sync_words:
+            return []
+        counts = defaultdict(int)
+        for sw in sync_words:
+            counts[len(sw)] += 1
+        best_len = max(counts, key=lambda length: (counts[length], length))
+        return [sw for sw in dict.fromkeys(sync_words) if len(sw) == best_len]
 
     def get_preamble_lengths_from_sync_words(
         self, sync_words: list, preamble_starts: np.ndarray
