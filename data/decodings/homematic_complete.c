@@ -8,7 +8,8 @@ typedef unsigned short uint16;
 
 uint16 crc(byte *data, int len) 
 {
-    byte i, x, crcdata;
+    byte i, crcdata;
+    int x; /* int: with a byte counter the loop never ended for len > 255 */
     uint16 crcReg = 0xFFFF;  
     for (x = 0; x < len; x++)
     { 
@@ -95,7 +96,7 @@ void xor_lfsr(char *string)
                 first_bit = 0;
             
             // Clock
-            for(j = 8; j >= 0; j--)
+            for(j = 8; j >= 1; j--)  /* j >= 0 read lfsr_state[-1] (undefined behaviour) */
                 lfsr_state[j] = lfsr_state[j-1];
             lfsr_state[0] = first_bit;
         }
@@ -119,7 +120,7 @@ int main(int argc, char **argv)
     offset = 8; // Preamble + Sync
     
     // Copy data (argv[2]) to string if length is ok, shorten to multiple of 8 bit
-    if (strlen(argv[2]) > 8192*8 || strlen(argv[2]) < 4) return -1;
+    if (strlen(argv[2]) > 1024*8 || strlen(argv[2]) < 4) return -1; /* dec/enc hold 1024 bytes; 8192*8 bits overflowed them */
     len = strlen(argv[2]);    
     
     i = find_preamble_start_in_bit(argv[2], len);

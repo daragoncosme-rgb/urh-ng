@@ -23,7 +23,7 @@ int main(int argc, char **argv)
 {
     int i, max, offset;
     byte dec[256]={0}, enc[256]={0};
-    char string[2048]={0};
+    char string[2048+1]={0}; /* +1 for the terminating NUL */
     
     offset = 8; // Preamble + Sync
     
@@ -56,8 +56,10 @@ int main(int argc, char **argv)
                 dec[i] = (enc[i-1]+0xdc) ^ enc[i];
             dec[i] = enc[i] ^ dec[offset+2];
             
+            if (max >= 2) { /* avoid writing dec[-1] for very short inputs */
             dec[max-1]=0; // Set CRC to 0x0000
             dec[max-2]=0;
+            }
             
             for(i = 0; i < max; i++)
                 print_binary(dec[i]);
@@ -89,8 +91,10 @@ int main(int argc, char **argv)
                 enc[i] = (enc[i-1]+0xdc) ^ dec[i];
             enc[i] = dec[i] ^ dec[offset+2];
             
+            if (max >= 2) { /* avoid writing enc[-1] for very short inputs */
             enc[max-1]=0; // Set CRC to 0x0000
             enc[max-2]=0;
+            }
             
             for(i = 0; i < max; i++)
                 print_binary(enc[i]);    
