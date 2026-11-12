@@ -27,7 +27,7 @@
 param(
     [string]$WorkDir = "",
     [string]$DepsDir = "",
-    [string]$DecodersDir = $null,
+    [string]$DecodersDir = (Join-Path $PSScriptRoot "..\decoders"),
     [switch]$NoInstaller,
     [switch]$NoDependencies
 )
@@ -44,7 +44,6 @@ $Src        = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $SdrDllsUrl = "https://github.com/jopohl/sdrbuild/releases/download/v1.1/win-x64.zip"
 $PyVersion  = "3.13"
 if (-not $WorkDir) { $WorkDir = Join-Path $Src "build-windows" }
-if ($null -eq $DecodersDir) { $DecodersDir = Join-Path $Src "data\decoders" }
 
 function Info($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "[!] $m" -ForegroundColor Yellow }
@@ -209,7 +208,8 @@ $AppDir = Join-Path $Src "pyinstaller\urh"
 if (-not (Test-Path (Join-Path $AppDir "urh.exe"))) { Fail "PyInstaller did not create urh.exe." }
 
 Info "Testing the executable..."
-& (Join-Path $AppDir "urh_debug.exe") autoclose
+# Qt prints harmless "QThreadStorage" warnings on exit; show them as plain text
+& (Join-Path $AppDir "urh_debug.exe") autoclose 2>&1 | ForEach-Object { "    $_" }
 if ($LASTEXITCODE -ne 0) { Warn "'urh_debug.exe autoclose' returned $LASTEXITCODE; check the output above." }
 
 # ------------------------------------------------------------------- decoders
