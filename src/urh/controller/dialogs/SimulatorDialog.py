@@ -67,7 +67,10 @@ class SimulatorDialog(QDialog):
         self.backend_handler = BackendHandler()
         if self.rx_needed:
             self.device_settings_rx_widget = DeviceSettingsWidget(
-                project_manager, is_tx=False, backend_handler=self.backend_handler
+                project_manager,
+                is_tx=False,
+                backend_handler=self.backend_handler,
+                window_name="SimulatorDialog",
             )
 
             self.sniff_settings_widget = SniffSettingsWidget(
@@ -119,6 +122,7 @@ class SimulatorDialog(QDialog):
                 is_tx=True,
                 backend_handler=self.backend_handler,
                 continuous_send_mode=True,
+                window_name="SimulatorDialog",
             )
             self.device_settings_tx_widget.ui.spinBoxNRepeat.hide()
             self.device_settings_tx_widget.ui.labelNRepeat.hide()
@@ -305,8 +309,10 @@ class SimulatorDialog(QDialog):
         self.emit_editing_finished_signals()
         if self.device_settings_rx_widget:
             self.device_settings_rx_widget.emit_device_parameters_changed()
+            self.device_settings_rx_widget.save_last_used()
         if self.device_settings_tx_widget:
             self.device_settings_tx_widget.emit_device_parameters_changed()
+            self.device_settings_tx_widget.save_last_used()
         if self.sniff_settings_widget:
             self.sniff_settings_widget.emit_sniff_parameters_changed()
 

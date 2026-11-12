@@ -1,7 +1,7 @@
 from statistics import median
 
 import numpy as np
-from PyQt6.QtCore import QRegularExpression, pyqtSlot, pyqtSignal
+from PyQt6.QtCore import QRegularExpression, QTimer, pyqtSlot, pyqtSignal
 from PyQt6.QtGui import QRegularExpressionValidator, QIcon
 from PyQt6.QtWidgets import QWidget, QSpinBox, QLabel, QComboBox, QSlider
 
@@ -15,6 +15,7 @@ from urh.plugins.NetworkSDRInterface.NetworkSDRInterfacePlugin import (
 from urh.plugins.PluginManager import PluginManager
 from urh.ui.ui_send_recv_device_settings import Ui_FormDeviceSettings
 from urh.util.ProjectManager import ProjectManager
+from urh.util.Logger import logger
 
 
 class DeviceSettingsWidget(QWidget):
@@ -29,8 +30,14 @@ class DeviceSettingsWidget(QWidget):
         backend_handler: BackendHandler = None,
         continuous_send_mode=False,
         parent=None,
+        window_name: str = None,
     ):
         super().__init__(parent)
+        # Name of the window that owns this widget, used to remember the last
+        # device / device identifier / antenna per window (None = don't remember)
+        self.window_name = window_name
+        self.__refreshing = False
+        self.__changing_device = False
         self.ui = Ui_FormDeviceSettings()
         self.ui.setupUi(self)
 
@@ -54,7 +61,10 @@ class DeviceSettingsWidget(QWidget):
         self.ui.cbDevice.clear()
         items = self.get_devices_for_combobox(continuous_send_mode)
         self.ui.cbDevice.addItems(items)
-        self.bootstrap(project_manager.device_conf, enforce_default=True)
+        self.bootstrap(
+            self.__conf_with_last_used(project_manager.device_conf),
+            enforce_default=True,
+        )
 
         self.ui.btnLockBWSR.setChecked(self.bw_sr_are_locked)
         self.on_btn_lock_bw_sr_clicked()
@@ -75,6 +85,103 @@ class DeviceSettingsWidget(QWidget):
 
         self.create_connects()
         self.sync_gain_sliders()
+
+        # The dialog creates the device after this widget, so press the
+        # "automatically detect" button once the window has been built.
+        QTimer.singleShot(0, self.refresh_and_select_last_identifier)
+
+    # ------------------------------------------- remember last used device
+    # The device is remembered globally (shared by all windows); the device
+    # identifier and the antenna are remembered per device type.
+    LAST_DEVICE_KEY = "DeviceSettingsWidget/last_device"
+
+    @staticmethod
+    def __per_device_key(what: str, device_name: str) -> str:
+        return "DeviceSettingsWidget/{}/{}".format(what, device_name)
+
+    def __last_device(self) -> str:
+        name = settings.read(self.LAST_DEVICE_KEY, "", type=str)
+        if not name and self.window_name:
+            # Value saved by the previous (per window) version of this feature
+            name = settings.read(
+                "DeviceSettingsWidget/{}/{}/device".format(
+                    self.window_name, "tx" if self.is_tx else "rx"
+                ),
+                "",
+                type=str,
+            )
+        return name
+
+    def __conf_with_last_used(self, conf: dict) -> dict:
+        conf = dict(conf)
+        last_device = self.__last_device()
+        if last_device and self.ui.cbDevice.findText(last_device) != -1:
+            conf["name"] = last_device
+            antenna = settings.read(
+                self.__per_device_key(self.rx_tx_prefix + "antenna_index", last_device),
+                -1,
+                type=int,
+            )
+            if antenna >= 0:
+                conf[self.rx_tx_prefix + "antenna_index"] = antenna
+        return conf
+
+    def __remember_device(self):
+        name = self.ui.cbDevice.currentText()
+        if name:
+            settings.write(self.LAST_DEVICE_KEY, name)
+
+    def __remember_identifier(self):
+        identifier = self.ui.comboBoxDeviceIdentifier.currentText()
+        name = self.ui.cbDevice.currentText()
+        if identifier and name and not self.__refreshing:
+            settings.write(self.__per_device_key("identifier", name), identifier)
+
+    def __remember_antenna(self):
+        name = self.ui.cbDevice.currentText()
+        if (
+            name
+            and not self.__changing_device
+            and self.ui.comboBoxAntenna.isVisibleTo(self)
+        ):
+            settings.write(
+                self.__per_device_key(self.rx_tx_prefix + "antenna_index", name),
+                self.ui.comboBoxAntenna.currentIndex(),
+            )
+
+    def save_last_used(self):
+        """Remember the selected device, device identifier and antenna."""
+        self.__remember_device()
+        self.__remember_identifier()
+        self.__remember_antenna()
+
+    @pyqtSlot()
+    def refresh_and_select_last_identifier(self):
+        """Press "automatically detect" and re-select the last used identifier."""
+        name = self.ui.cbDevice.currentText()
+        last_identifier = settings.read(
+            self.__per_device_key("identifier", name), "", type=str
+        )
+        try:
+            # Only when the device supports it (the button is shown)
+            if (
+                self.device is None
+                or not self.ui.btnRefreshDeviceIdentifier.isVisibleTo(self)
+            ):
+                return
+            self.__refreshing = True
+            self.ui.btnRefreshDeviceIdentifier.click()
+        except Exception as e:
+            logger.warning("Could not detect devices automatically: {}".format(e))
+            return
+        finally:
+            self.__refreshing = False
+
+        if last_identifier:
+            index = self.ui.comboBoxDeviceIdentifier.findText(last_identifier)
+            if index != -1:
+                self.ui.comboBoxDeviceIdentifier.setCurrentIndex(index)
+        self.__remember_identifier()
 
     def bootstrap(self, conf_dict: dict, enforce_default=False):
         def set_val(ui_widget, key: str, default):
@@ -620,6 +727,7 @@ class DeviceSettingsWidget(QWidget):
 
     @pyqtSlot(int)
     def on_combobox_antenna_current_index_changed(self, index: int):
+        self.__remember_antenna()
         self.device.antenna_index = index
 
     @pyqtSlot(int)
@@ -719,7 +827,25 @@ class DeviceSettingsWidget(QWidget):
 
     @pyqtSlot()
     def on_cb_device_current_index_changed(self):
-        self.update_for_new_device(overwrite_settings=True)
+        self.__changing_device = True
+        try:
+            self.update_for_new_device(overwrite_settings=True)
+        finally:
+            self.__changing_device = False
+        self.__remember_device()
+        # Restore the antenna last used with this device type
+        name = self.ui.cbDevice.currentText()
+        antenna = settings.read(
+            self.__per_device_key(self.rx_tx_prefix + "antenna_index", name),
+            -1,
+            type=int,
+        )
+        if (
+            self.ui.comboBoxAntenna.isVisibleTo(self)
+            and 0 <= antenna < self.ui.comboBoxAntenna.count()
+        ):
+            self.ui.comboBoxAntenna.setCurrentIndex(antenna)
+        QTimer.singleShot(0, self.refresh_and_select_last_identifier)
 
     @pyqtSlot()
     def on_btn_refresh_device_identifier_clicked(self):
@@ -739,6 +865,7 @@ class DeviceSettingsWidget(QWidget):
 
     @pyqtSlot()
     def on_combo_box_device_identifier_current_index_changed(self):
+        self.__remember_identifier()
         if self.device is not None:
             self.device.device_serial = self.ui.comboBoxDeviceIdentifier.currentText()
             self.device.device_number = self.ui.comboBoxDeviceIdentifier.currentIndex()

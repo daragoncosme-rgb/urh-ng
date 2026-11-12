@@ -61,6 +61,7 @@ class SendRecvDialog(QDialog):
             is_tx,
             backend_handler=self.backend_handler,
             continuous_send_mode=continuous_send_mode,
+            window_name=self.__class__.__name__,
         )
         self.ui.scrollAreaWidgetContents_2.layout().insertWidget(
             0, self.device_settings_widget
@@ -323,6 +324,8 @@ class SendRecvDialog(QDialog):
         settings.write(
             "{}/geometry".format(self.__class__.__name__), self.saveGeometry()
         )
+        if not self.testing_mode:
+            self.device_settings_widget.save_last_used()
 
         if self.device is not None:
             self.device.free_data()
