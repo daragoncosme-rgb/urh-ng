@@ -16,6 +16,8 @@ As data often gets encoded before transmission, URH-NG offers customizable decod
 When it comes to protocol reverse-engineering, URH-NG is helpful in two ways. You can either manually assign protocol fields and message types or let URH-NG **automatically infer protocol fields** with a [rule-based intelligence](https://www.usenix.org/conference/woot19/presentation/pohl).
 Finally, URH-NG entails a fuzzing component aimed at stateless protocols and a simulation environment for stateful attacks.
 
+> **About this fork** -- This repository is a fork of [PentHertz/urh-ng](https://github.com/PentHertz/urh-ng) with bug fixes, a local Windows build (portable version and installer), the last used SDR remembered across windows, and bundled HomeMatic/EnOcean decoders. See the [Unreleased section of the changelog](CHANGELOG.md#unreleased) for the full list.
+
 ---
 
 ## What's New in URH-NG
@@ -130,6 +132,26 @@ pip install urh-ng
 
 If you get an error about missing `api-ms-win-crt-runtime-l1-1-0.dll`, run Windows Update or install [KB2999226](https://support.microsoft.com/en-us/help/2999226/update-for-universal-c-runtime-in-windows).
 
+#### Building the portable version and installer
+
+On Windows 10/11 x64, double-click `data\windows\build.bat` (or run
+`powershell -ExecutionPolicy Bypass -File data\windows\build_windows.ps1`).
+It installs any missing tools with winget (Git, Python 3.13, Visual Studio
+Build Tools, Inno Setup), builds the extensions and writes to `dist\`:
+
+- `URH-NG-<version>-win-x64-portable.zip`
+- `URH-NG-<version>-x64.exe` (installer; it uses its own name and AppId, so it
+  can be installed next to the original Universal Radio Hacker)
+
+Both include the decoders from `data/decoders`. To keep all tools and
+temporary files on another drive:
+
+```bat
+data\windows\build.bat -WorkDir G:\urh-ng-build -DepsDir G:\urh-ng-build\deps
+```
+
+For USB SDRs (HackRF, RTL-SDR...) install the WinUSB driver with [Zadig](https://zadig.akeo.ie).
+
 ### macOS
 
 ```bash
@@ -216,6 +238,9 @@ See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list of contributions.
 
 ## External Decodings
 See [wiki](https://github.com/jopohl/urh/wiki/External-decodings) for community-provided decodings.
+
+Prebuilt HomeMatic and EnOcean decoders for Windows, Linux and macOS, plus a
+set of ready-to-use decodings, are in [data/decoders](data/decoders/README.md).
 
 ## Screenshots
 
