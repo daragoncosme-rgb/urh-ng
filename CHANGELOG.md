@@ -23,6 +23,11 @@ All notable changes to URH-NG are documented here.
   and 19 ready-to-use decodings. The Windows installer sets them up in
   `%APPDATA%\urh`; on Linux/macOS run `sh data/decoders/install.sh`.
 
+- **Help -> Install decoders for this user.** The installer sets the bundled
+  decoders up only for the Windows user who installs URH-NG; other users of
+  the same PC and users of the portable version can install them from this
+  menu entry. The decodings are reloaded right away.
+
 ### Changed
 - The Windows installer uses its own identity (name "URH-NG", new AppId,
   `Program Files\URH-NG`, `URH-NG-<version>-<arch>.exe`). It previously reused
@@ -30,6 +35,13 @@ All notable changes to URH-NG are documented here.
   uninstalling URH-NG replaced or removed an existing URH installation.
 
 ### Fixed
+- **Windows build and decoder installation from any path.** The build failed
+  when the repository was in a folder with spaces (the PyInstaller command
+  was not quoted) and `build.bat` broke with spaces or apostrophes in the
+  options; temporary files now stay in the work folder even when the user
+  name has spaces or accents. The decoder installers handle user folders
+  with spaces (Linux/macOS) and with `, ; '` or non-ASCII characters
+  (Windows, using the short 8.3 path).
 - **Spectrum Analyzer froze while receiving** and did not react to Stop or to
   clicks on the spectrum/waterfall (Windows showed it as "not responding").
   It refreshed every 1 ms although one refresh (FFT, waterfall, time domain,
