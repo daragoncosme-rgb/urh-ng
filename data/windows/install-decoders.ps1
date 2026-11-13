@@ -11,9 +11,12 @@
 #  Safe to run several times. Close URH before running it.
 #
 #  Usage: double-click install-decoders.bat   (-Silent: do not wait for a key)
-#  The URH-NG installer runs it automatically.
+#  The URH-NG installer runs it automatically for the user who installs it;
+#  other Windows users can run it from URH-NG: Help -> Install decoders.
+#  -SourceDir: folder with windows-x64\ and decodings.txt (default: this
+#  script's folder).
 # =============================================================================
-param([switch]$Silent)
+param([switch]$Silent, [string]$SourceDir = "")
 $ErrorActionPreference = 'Stop'
 
 # URH stores decodings in a text file where , ; and ' are separators, and it
@@ -37,7 +40,7 @@ function Done($code) {
 }
 
 try {
-    $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $here = if ($SourceDir) { $SourceDir } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
     $conf = Join-Path $env:APPDATA 'urh'
     $dest = Join-Path $conf 'decoders'
     New-Item -ItemType Directory -Force -Path $dest | Out-Null

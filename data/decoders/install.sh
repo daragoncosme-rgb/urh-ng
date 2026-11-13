@@ -17,8 +17,8 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "Unsupported platform: $(uname -s) $(uname -m)"; exit 1 ;;
 esac
 
-case "$DEST" in *,*|*\;*|*\'*)
-  echo "Your home path contains , ; or ' and URH cannot use it in decodings.txt: $DEST"; exit 1 ;;
+case "$DEST" in *,*|*\;*|*\'*|*\"*)
+  echo "Your home path contains , ; ' or \" and URH cannot use it in decodings.txt: $DEST"; exit 1 ;;
 esac
 
 mkdir -p "$DEST"
@@ -41,10 +41,11 @@ fi
 
 TMP=$(mktemp)
 cat "$HERE/decodings.txt" > "$TMP"
+# Paths in double quotes: URH splits the command at spaces otherwise
 cat >> "$TMP" <<LINES
-'HomeMatic (complete: whitening + CRC)', 'External Program', '$DEST/homematic_complete d;$DEST/homematic_complete e',
-'HomeMatic (cipher only)', 'External Program', '$DEST/homematic d;$DEST/homematic e',
-'EnOcean Switch Telegram', 'External Program', '$DEST/enocean_switchtelegram d;$DEST/enocean_switchtelegram e',
+'HomeMatic (complete: whitening + CRC)', 'External Program', '"$DEST/homematic_complete" d;"$DEST/homematic_complete" e',
+'HomeMatic (cipher only)', 'External Program', '"$DEST/homematic" d;"$DEST/homematic" e',
+'EnOcean Switch Telegram', 'External Program', '"$DEST/enocean_switchtelegram" d;"$DEST/enocean_switchtelegram" e',
 LINES
 
 # Only add lines whose name is not in the file yet

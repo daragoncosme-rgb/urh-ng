@@ -1,7 +1,7 @@
 import copy
 import os
 
-from PyQt6.QtCore import QDir, Qt, pyqtSlot, QTimer
+from PyQt6.QtCore import QDir, Qt, pyqtSlot, QTimer, QProcess
 from PyQt6.QtGui import (
     QIcon,
     QCloseEvent,
@@ -33,7 +33,7 @@ from urh.plugins.PluginManager import PluginManager
 from urh.signalprocessing.ProtocolAnalyzer import ProtocolAnalyzer
 from urh.signalprocessing.Signal import Signal
 from urh.ui.ui_main import Ui_MainWindow
-from urh.util import FileOperator, util
+from urh.util import FileOperator, util, DecoderInstaller
 from urh.util.Errors import Errors
 from urh.util.Logger import logger
 from urh.util.ProjectManager import ProjectManager
@@ -137,6 +137,24 @@ class MainController(QMainWindow):
         self.ui.action10NoiseThreshold.setChecked(noise_threshold_setting == "10")
         self.ui.action100NoiseThreshold.setActionGroup(noise_threshold_group)
         self.ui.action100NoiseThreshold.setChecked(noise_threshold_setting == "100")
+
+        # Help -> Install decoders: the installer only sets the bundled
+        # decoders up for the user who installs URH-NG
+        self.action_install_decoders = QAction(
+            self.tr("Install decoders for this user..."), self
+        )
+        self.action_install_decoders.setObjectName("actionInstallDecoders")
+        self.action_install_decoders.setToolTip(
+            self.tr(
+                "Install the bundled HomeMatic/EnOcean decoders and decodings "
+                "for the current user"
+            )
+        )
+        self.ui.menuHelp.insertAction(
+            self.ui.actionAbout_AutomaticHacker, self.action_install_decoders
+        )
+        self.ui.menuHelp.insertSeparator(self.ui.actionAbout_AutomaticHacker)
+        self.decoder_install_process = None
 
         self.recentFileActionList = []
         self.create_connects()
@@ -254,6 +272,9 @@ class MainController(QMainWindow):
         )
         self.ui.actionSniff_protocol.triggered.connect(self.show_proto_sniff_dialog)
         self.ui.actionAbout_Qt.triggered.connect(QApplication.aboutQt)
+        self.action_install_decoders.triggered.connect(
+            self.on_install_decoders_action_triggered
+        )
         self.ui.actionSamples_from_csv.triggered.connect(
             self.on_import_samples_from_csv_action_triggered
         )
@@ -839,6 +860,84 @@ class MainController(QMainWindow):
             self.filemodel.setNameFilters(["*" + text + "*"])
         else:
             self.filemodel.setNameFilters(["*"])
+
+    @pyqtSlot()
+    def on_install_decoders_action_triggered(self):
+        program, args, decoders = DecoderInstaller.get_install_command()
+        if program is None:
+            QMessageBox.warning(
+                self,
+                self.tr("Install decoders"),
+                self.tr("The bundled decoders were not found in:\n{}").format(decoders),
+            )
+            return
+
+        conf_dir = os.path.dirname(settings.get_qt_settings_filename())
+        reply = QMessageBox.question(
+            self,
+            self.tr("Install decoders"),
+            self.tr(
+                "Install the bundled decoders for the current user?\n\n"
+                "The decoder programs are copied to:\n{0}\n\n"
+                "Missing decodings are added to decodings.txt in that folder "
+                "(a backup is made first). Your own decodings are kept."
+            ).format(os.path.join(conf_dir, "decoders")),
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.action_install_decoders.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.finished.connect(self.on_decoder_install_finished)
+        process.errorOccurred.connect(self.on_decoder_install_error)
+        self.decoder_install_process = process
+        logger.info("Installing decoders: {} {}".format(program, args))
+        process.start(program, args)
+
+    def __end_decoder_install(self) -> str:
+        QApplication.restoreOverrideCursor()
+        self.action_install_decoders.setEnabled(True)
+        process, self.decoder_install_process = self.decoder_install_process, None
+        if process is None:
+            return ""
+        output = bytes(process.readAll()).decode("utf-8", errors="replace").strip()
+        process.deleteLater()
+        return output
+
+    @pyqtSlot(int, QProcess.ExitStatus)
+    def on_decoder_install_finished(self, exit_code: int, exit_status):
+        if self.decoder_install_process is None:
+            return
+        output = self.__end_decoder_install()
+        if exit_code == 0 and exit_status == QProcess.ExitStatus.NormalExit:
+            self.update_decodings()
+            QMessageBox.information(
+                self, self.tr("Install decoders"), output or self.tr("Done.")
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                self.tr("Install decoders"),
+                self.tr(
+                    "Installing the decoders failed (exit code {0}).\n\n{1}"
+                ).format(exit_code, output),
+            )
+
+    @pyqtSlot(QProcess.ProcessError)
+    def on_decoder_install_error(self, error):
+        # Only start failures: a crash or non-zero exit is reported by finished
+        if error != QProcess.ProcessError.FailedToStart:
+            return
+        if self.decoder_install_process is None:
+            return
+        self.__end_decoder_install()
+        QMessageBox.warning(
+            self,
+            self.tr("Install decoders"),
+            self.tr("Could not start the decoder installer."),
+        )
 
     @pyqtSlot()
     def on_show_decoding_dialog_triggered(self):
