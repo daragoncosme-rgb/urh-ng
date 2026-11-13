@@ -30,6 +30,16 @@ All notable changes to URH-NG are documented here.
   uninstalling URH-NG replaced or removed an existing URH installation.
 
 ### Fixed
+- **Spectrum Analyzer froze while receiving** and did not react to Stop or to
+  clicks on the spectrum/waterfall (Windows showed it as "not responding").
+  It refreshed every 1 ms although one refresh (FFT, waterfall, time domain,
+  constellation, modulation detection) takes much longer, so the window
+  never had time to process user input. It now refreshes every 40 ms, or at
+  least twice the duration of the last refresh on slow PCs.
+- **Spectrum Analyzer memory kept growing** (2 GB in a long session): every
+  refresh added a new waterfall image and none was removed. The waterfall now
+  keeps the last 20480 rows. The constellation is drawn as a single item and
+  the FFT peak search for modulation detection uses NumPy (35x faster).
 - **Crash when stopping reception with RTL-SDR and other synchronous devices.**
   When the GUI closed the data pipe, the device process failed with
   `BrokenPipeError [WinError 109]`, skipped closing the device (which could
