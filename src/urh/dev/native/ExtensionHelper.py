@@ -77,7 +77,16 @@ def compiler_has_function(
             devnull = open(os.devnull, "w")
             old_stderr = os.dup(sys.stderr.fileno())
             os.dup2(devnull.fileno(), sys.stderr.fileno())
-            objects = compiler.compile([file_name], include_dirs=include_dirs)
+            objects = compiler.compile(
+                [file_name],
+                # Object files go to the temporary folder that is deleted
+                # below. Without output_dir the compiler writes them under the
+                # current directory, mirroring the absolute temp path (on
+                # Windows this left e.g. "Users\...\Temp\urh-*\*.obj" folders
+                # inside the repository).
+                output_dir=tmp_dir,
+                include_dirs=include_dirs,
+            )
             compiler.link_executable(
                 objects,
                 os.path.join(tmp_dir, "a.out"),
@@ -105,7 +114,16 @@ def check_api_version(
             with open(file_name, "w") as f:
                 f.write(api_version_code)
 
-            objects = compiler.compile([file_name], include_dirs=include_dirs)
+            objects = compiler.compile(
+                [file_name],
+                # Object files go to the temporary folder that is deleted
+                # below. Without output_dir the compiler writes them under the
+                # current directory, mirroring the absolute temp path (on
+                # Windows this left e.g. "Users\...\Temp\urh-*\*.obj" folders
+                # inside the repository).
+                output_dir=tmp_dir,
+                include_dirs=include_dirs,
+            )
             check_api_program = os.path.join(tmp_dir, "check_api")
             compiler.link_executable(
                 objects,
