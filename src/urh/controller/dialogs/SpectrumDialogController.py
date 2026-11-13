@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 from PyQt6.QtCore import QTimer, pyqtSlot, Qt
 from PyQt6.QtGui import (
@@ -30,13 +32,21 @@ from urh.ui.painting.FFTSceneManager import FFTSceneManager
 
 
 class SpectrumDialogController(SendRecvDialog):
+    # Refresh period of the live views (~25 frames per second)
+    UPDATE_INTERVAL_MS = 40
+    # Rows kept in the waterfall; older rows are dropped so memory does not grow
+    MAX_SPECTROGRAM_ROWS = 20 * Spectrogram.DEFAULT_FFT_WINDOW_SIZE
+
     def __init__(self, project_manager, parent=None, testing_mode=False):
         super().__init__(
             project_manager, is_tx=False, parent=parent, testing_mode=testing_mode
         )
 
         self.graphics_view = self.ui.graphicsViewFFT
-        self.update_interval = 1
+        # One refresh does the FFT, waterfall, time domain, constellation and
+        # modulation detection. With a 1 ms timer the event loop never got to
+        # process user input (the window froze and Stop did not react).
+        self.update_interval = self.UPDATE_INTERVAL_MS
         self.ui.stackedWidget.setCurrentWidget(self.ui.page_spectrum)
         self.hide_receive_ui_items()
         self.hide_send_ui_items()
@@ -157,6 +167,7 @@ class SpectrumDialogController(SendRecvDialog):
 
     def __clear_spectrogram(self):
         self.ui.graphicsViewSpectrogram.scene().clear()
+        self._spectrogram_items = []
         ws = Spectrogram.DEFAULT_FFT_WINDOW_SIZE
         self.ui.graphicsViewSpectrogram.scene().setSceneRect(0, 0, ws, 20 * ws)
         self.spectrogram_y_pos = 0
@@ -172,13 +183,30 @@ class SpectrumDialogController(SendRecvDialog):
         pixmap = QPixmap.fromImage(spectrogram.create_spectrogram_image(transpose=True))
         item = scene.addPixmap(pixmap)
         item.moveBy(0, self.spectrogram_y_pos)
+        self._spectrogram_items.append(item)
         self.spectrogram_y_pos += pixmap.height()
-        if self.spectrogram_y_pos >= scene.sceneRect().height():
+
+        # Drop the oldest rows instead of keeping every image forever: the
+        # scene grew by several MB per second and slowed everything down.
+        removed = 0
+        while (
+            self.spectrogram_y_pos - removed > self.MAX_SPECTROGRAM_ROWS
+            and len(self._spectrogram_items) > 1
+        ):
+            oldest = self._spectrogram_items.pop(0)
+            removed += oldest.pixmap().height()
+            scene.removeItem(oldest)
+        if removed:
+            for it in self._spectrogram_items:
+                it.moveBy(0, -removed)
+            self.spectrogram_y_pos -= removed
+
+        if self.spectrogram_y_pos >= scene.sceneRect().height() or removed:
             scene.setSceneRect(
                 0,
                 0,
                 Spectrogram.DEFAULT_FFT_WINDOW_SIZE,
-                self.spectrogram_y_pos,
+                max(self.spectrogram_y_pos, scene.sceneRect().height()),
             )
             self.ui.graphicsViewSpectrogram.ensureVisible(item)
 
@@ -235,15 +263,14 @@ class SpectrumDialogController(SendRecvDialog):
             br = QBrush(QColor(0, 255, 100, 140))
             pn = QPen(Qt.PenStyle.NoPen)
             step = max(1, len(iq) // 512)
-            for j in range(0, len(iq), step):
-                self._const_scene.addEllipse(
-                    cx + float(i_d[j]) * sc - 1,
-                    cy - float(q_d[j]) * sc - 1,
-                    2,
-                    2,
-                    pn,
-                    br,
-                )
+            # One path item with all dots instead of one scene item per dot
+            dots = QPainterPath()
+            for x, y in zip(
+                (cx + i_d[::step] * sc - 1).tolist(),
+                (cy - q_d[::step] * sc - 1).tolist(),
+            ):
+                dots.addEllipse(x, y, 2, 2)
+            self._const_scene.addPath(dots, pn, br)
             self._const_scene.setSceneRect(0, 0, sz, sz)
             self._const_view.fitInView(
                 0, 0, sz, sz, Qt.AspectRatioMode.IgnoreAspectRatio
@@ -288,15 +315,20 @@ class SpectrumDialogController(SendRecvDialog):
                 # Peaks must be within 30dB of max and at least 2% of FFT width apart
                 peak_thr = fft_max_db - 30
                 min_dist = max(len(fft_db) // 50, 2)
+                mid = fft_db[1:-1]
+                candidates = (
+                    np.flatnonzero(
+                        (mid > fft_db[:-2]) & (mid > fft_db[2:]) & (mid > peak_thr)
+                    )
+                    + 1
+                )
+                # Candidates are in ascending order, so a candidate is far
+                # enough from every accepted peak iff it is far enough from
+                # the last one.
                 peaks = []
-                for i in range(1, len(fft_db) - 1):
-                    if (
-                        fft_db[i] > fft_db[i - 1]
-                        and fft_db[i] > fft_db[i + 1]
-                        and fft_db[i] > peak_thr
-                    ):
-                        if all(abs(i - p) >= min_dist for p in peaks):
-                            peaks.append(i)
+                for i in candidates.tolist():
+                    if not peaks or i - peaks[-1] >= min_dist:
+                        peaks.append(i)
                 nfp = len(peaks)
 
             # ── Instantaneous frequency histogram ──
@@ -376,6 +408,19 @@ class SpectrumDialogController(SendRecvDialog):
     # ── Main update ──────────────────────────────────────────
 
     def update_view(self):
+        started = time.perf_counter()
+        try:
+            self.__update_view()
+        finally:
+            # Adaptive refresh: wait at least twice as long as the last refresh
+            # took, so at least half of the time is left for user input
+            # (clicks, Stop) even on slow PCs.
+            elapsed_ms = 1000 * (time.perf_counter() - started)
+            interval = max(self.UPDATE_INTERVAL_MS, int(2 * elapsed_ms))
+            if self.timer.isActive() and self.timer.interval() != interval:
+                self.timer.setInterval(interval)
+
+    def __update_view(self):
         if super().update_view():
             x, y = self.device.spectrum
             if x is None or y is None:
