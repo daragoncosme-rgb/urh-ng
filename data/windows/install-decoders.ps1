@@ -34,8 +34,12 @@ function Get-SafePath([string]$path) {
     return $null
 }
 
+# Write to stdout without the host's line wrapping (Write-Host wraps long
+# lines at 80 columns when started without a console, e.g. from URH-NG)
+function Say([string]$m) { [Console]::Out.WriteLine($m) }
+
 function Done($code) {
-    if (-not $Silent) { Write-Host ""; Read-Host "Press Enter to close" | Out-Null }
+    if (-not $Silent) { Say ""; Read-Host "Press Enter to close" | Out-Null }
     exit $code
 }
 
@@ -48,7 +52,7 @@ try {
     # Path written into decodings.txt (the files are copied to $dest)
     $destForUrh = Get-SafePath $dest
     if (-not $destForUrh) {
-        Write-Host "URH cannot use this folder in decodings.txt (it contains , ; or ' and has no short 8.3 name): $dest"
+        Say "URH cannot use this folder in decodings.txt (it contains , ; or ' and has no short 8.3 name): $dest"
         Done 1
     }
 
@@ -67,7 +71,7 @@ try {
         Unblock-File -LiteralPath $target -ErrorAction SilentlyContinue
         if (-not $labels.Contains($e.BaseName)) { $labels[$e.BaseName] = $e.BaseName }
     }
-    Write-Host "$($exes.Count) decoder programs copied to $dest"
+    Say "$($exes.Count) decoder programs copied to $dest"
 
     # 2. Read the current decodings.txt (with a backup)
     $file = Join-Path $conf 'decodings.txt'
@@ -105,17 +109,17 @@ try {
     [System.IO.File]::WriteAllLines($file, [string[]]$all, $enc)
 
     $replaced = @($existing | Where-Object { $replace -contains (Name-Of $_) }).Count
-    Write-Host "$($addPrim.Count) built-in decodings added, $($extLines.Count) external decoders installed ($replaced replaced) in $file"
+    Say "$($addPrim.Count) built-in decodings added, $($extLines.Count) external decoders installed ($replaced replaced) in $file"
 
     # 6. Quick test
     $probe = Join-Path $dest 'enocean_switchtelegram.exe'
     if (Test-Path -LiteralPath $probe) {
         & $probe d 1010 | Out-Null
-        if ($LASTEXITCODE -eq 0) { Write-Host "Test OK." } else { Write-Host "Warning: the test returned $LASTEXITCODE." }
+        if ($LASTEXITCODE -eq 0) { Say "Test OK." } else { Say "Warning: the test returned $LASTEXITCODE." }
     }
-    Write-Host "Open URH-NG: they are in the Analysis tab and in Edit -> Decoding."
+    Say "Open URH-NG: they are in the Analysis tab and in Edit -> Decoding."
     Done 0
 } catch {
-    Write-Host "Error: $_"
+    Say "Error: $_"
     Done 1
 }

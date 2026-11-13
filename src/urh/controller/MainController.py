@@ -872,7 +872,10 @@ class MainController(QMainWindow):
             )
             return
 
-        conf_dir = os.path.dirname(settings.get_qt_settings_filename())
+        # Qt returns "/" separators; show the path the way the OS writes it
+        conf_dir = os.path.normpath(
+            os.path.dirname(settings.get_qt_settings_filename())
+        )
         reply = QMessageBox.question(
             self,
             self.tr("Install decoders"),
