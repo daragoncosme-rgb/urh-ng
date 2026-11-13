@@ -71,7 +71,9 @@ try {
         Unblock-File -LiteralPath $target -ErrorAction SilentlyContinue
         if (-not $labels.Contains($e.BaseName)) { $labels[$e.BaseName] = $e.BaseName }
     }
-    Say "$($exes.Count) decoder programs copied to $dest"
+    # Paths on their own lines: dialogs wrap long lines in the middle of a path
+    Say "$($exes.Count) decoder programs copied to:"
+    Say "  $dest"
 
     # 2. Read the current decodings.txt (with a backup)
     $file = Join-Path $conf 'decodings.txt'
@@ -109,7 +111,8 @@ try {
     [System.IO.File]::WriteAllLines($file, [string[]]$all, $enc)
 
     $replaced = @($existing | Where-Object { $replace -contains (Name-Of $_) }).Count
-    Say "$($addPrim.Count) built-in decodings added, $($extLines.Count) external decoders installed ($replaced replaced) in $file"
+    Say "$($addPrim.Count) built-in decodings added and $($extLines.Count) external decoders installed ($replaced replaced) in:"
+    Say "  $file"
 
     # 6. Quick test
     $probe = Join-Path $dest 'enocean_switchtelegram.exe'

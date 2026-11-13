@@ -60,6 +60,6 @@ done < "$TMP"
 rm -f "$TMP"
 
 # Quick test
-"$DEST/enocean_switchtelegram" d 1010 >/dev/null && echo "Decoders OK ($PLAT) in $DEST"
-echo "$added decodings added to $FILE"
+"$DEST/enocean_switchtelegram" d 1010 >/dev/null && printf 'Decoders OK (%s) in:\n  %s\n' "$PLAT" "$DEST"
+printf '%s decodings added to:\n  %s\n' "$added" "$FILE"
 echo "Open URH: they are in the Analysis tab and in Edit -> Decoding."
