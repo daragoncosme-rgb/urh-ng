@@ -16,6 +16,21 @@
 param([switch]$Silent)
 $ErrorActionPreference = 'Stop'
 
+# URH stores decodings in a text file where , ; and ' are separators, and it
+# reads the file with the system code page. If the user's folder contains any
+# of those characters (or characters outside the code page), use the short
+# 8.3 form of the path, which never contains them.
+function Get-SafePath([string]$path) {
+    $enc = [System.Text.Encoding]::Default
+    $roundTrip = $enc.GetString($enc.GetBytes($path))
+    if ($path -notmatch "[,;']" -and $roundTrip -eq $path) { return $path }
+    try {
+        $short = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($path).ShortPath
+        if ($short -and $short -notmatch "[,;']") { return $short }
+    } catch { }
+    return $null
+}
+
 function Done($code) {
     if (-not $Silent) { Write-Host ""; Read-Host "Press Enter to close" | Out-Null }
     exit $code
@@ -25,9 +40,12 @@ try {
     $here = Split-Path -Parent $MyInvocation.MyCommand.Path
     $conf = Join-Path $env:APPDATA 'urh'
     $dest = Join-Path $conf 'decoders'
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-    if ($dest -match "[,;']") {
-        Write-Host "Your user path contains , ; or ' and URH cannot use it in decodings.txt: $dest"
+    # Path written into decodings.txt (the files are copied to $dest)
+    $destForUrh = Get-SafePath $dest
+    if (-not $destForUrh) {
+        Write-Host "URH cannot use this folder in decodings.txt (it contains , ; or ' and has no short 8.3 name): $dest"
         Done 1
     }
 
@@ -39,12 +57,11 @@ try {
     }
 
     # 1. Copy the programs
-    New-Item -ItemType Directory -Force -Path $dest | Out-Null
-    $exes = @(Get-ChildItem -Path (Join-Path $here 'windows-x64') -Filter '*.exe' -ErrorAction SilentlyContinue)
+    $exes = @(Get-ChildItem -LiteralPath (Join-Path $here 'windows-x64') -Filter '*.exe' -ErrorAction SilentlyContinue)
     foreach ($e in $exes) {
         $target = Join-Path $dest $e.Name
-        Copy-Item $e.FullName $target -Force
-        Unblock-File $target -ErrorAction SilentlyContinue
+        Copy-Item -LiteralPath $e.FullName -Destination $target -Force
+        Unblock-File -LiteralPath $target -ErrorAction SilentlyContinue
         if (-not $labels.Contains($e.BaseName)) { $labels[$e.BaseName] = $e.BaseName }
     }
     Write-Host "$($exes.Count) decoder programs copied to $dest"
@@ -53,8 +70,8 @@ try {
     $file = Join-Path $conf 'decodings.txt'
     $enc  = [System.Text.Encoding]::Default   # URH reads it with the local code page
     $existing = @()
-    if (Test-Path $file) {
-        Copy-Item $file "$file.bak.$(Get-Date -Format yyyyMMddHHmmss)"
+    if (Test-Path -LiteralPath $file) {
+        Copy-Item -LiteralPath $file -Destination "$file.bak.$(Get-Date -Format yyyyMMddHHmmss)"
         $existing = @([System.IO.File]::ReadAllLines($file, $enc) | Where-Object { $_.Trim() -ne '' })
     }
     function Name-Of($line) { (($line -split ',')[0]).Trim().Trim("'") }
@@ -62,7 +79,7 @@ try {
     # 3. Lines of the external decoders, with the right syntax
     $extLines = @()
     foreach ($e in $exes) {
-        $p = Join-Path $dest $e.Name
+        $p = Join-Path $destForUrh $e.Name
         $extLines += "'$($labels[$e.BaseName])', 'External Program', '`"$p`" d;`"$p`" e', "
     }
     $extNames = $extLines | ForEach-Object { Name-Of $_ }
@@ -72,7 +89,7 @@ try {
     # 4. Bundled built-in decodings
     $prims = @()
     $primFile = Join-Path $here 'decodings.txt'
-    if (Test-Path $primFile) {
+    if (Test-Path -LiteralPath $primFile) {
         $prims = @([System.IO.File]::ReadAllLines($primFile, $enc) | Where-Object { $_.Trim() -ne '' })
     }
 
@@ -89,7 +106,7 @@ try {
 
     # 6. Quick test
     $probe = Join-Path $dest 'enocean_switchtelegram.exe'
-    if (Test-Path $probe) {
+    if (Test-Path -LiteralPath $probe) {
         & $probe d 1010 | Out-Null
         if ($LASTEXITCODE -eq 0) { Write-Host "Test OK." } else { Write-Host "Warning: the test returned $LASTEXITCODE." }
     }

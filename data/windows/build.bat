@@ -1,26 +1,14 @@
 @echo off
 rem Build URH-NG for Windows (see build_windows.ps1 for the options).
-rem Example, keeping all tools and temporary files on drive G:
-rem    build.bat -WorkDir G:\urh-ng-build -DepsDir G:\urh-ng-build\deps
+rem Double-click it, or run it from a command prompt with options, e.g. to keep
+rem all tools and temporary files on another drive:
+rem    build.bat -WorkDir "D:\urh-ng build" -DepsDir "D:\urh-ng build\deps"
+rem The log is written next to this file (build.log).
 title Building URH-NG
-setlocal
-rem Save the script folder first: "shift" below also shifts %0
-set "HERE=%~dp0"
-set "REPO=%HERE%..\.."
-set "LOG=%HERE%build.log"
-set "WORK=%REPO%\build-windows"
-:findwork
-if "%~1"=="" goto run
-if /i "%~1"=="-WorkDir" set "WORK=%~2"
-shift
-goto findwork
-:run
-if not exist "%WORK%\tmp" mkdir "%WORK%\tmp"
-set "TEMP=%WORK%\tmp"
-set "TMP=%WORK%\tmp"
-set "PIP_CACHE_DIR=%WORK%\pip-cache"
-echo Log file: %LOG%
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%HERE%build_windows.ps1' %* *>&1 | Tee-Object -FilePath '%LOG%'; exit $LASTEXITCODE"
-echo Finished with exit code %ERRORLEVEL%
-endlocal
-timeout /t 30
+rem -File passes the arguments unchanged, so paths with spaces or apostrophes work.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_windows.ps1" %*
+set "URH_BUILD_RC=%ERRORLEVEL%"
+echo.
+echo Finished with exit code %URH_BUILD_RC%. Log file: "%~dp0build.log"
+if not defined URH_BUILD_NO_PAUSE pause
+exit /b %URH_BUILD_RC%

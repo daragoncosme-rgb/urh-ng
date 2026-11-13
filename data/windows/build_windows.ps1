@@ -23,13 +23,20 @@
 #                            "" to bundle none)
 #     -NoInstaller           Only build the portable version
 #     -NoDependencies        Do not install anything with winget
+#     -LogFile D:\path\x.log  Log file (default: build.log next to this script)
+#
+#  Paths: every path is taken relative to this repository or from the options
+#  above, so the repository can be anywhere (also in folders with spaces).
+#  Temporary files go to -WorkDir instead of the user's %TEMP%, because the
+#  C/C++ build can fail when the user name contains spaces or accents.
 # =============================================================================
 param(
     [string]$WorkDir = "",
     [string]$DepsDir = "",
     [string]$DecodersDir = (Join-Path $PSScriptRoot "..\decoders"),
     [switch]$NoInstaller,
-    [switch]$NoDependencies
+    [switch]$NoDependencies,
+    [string]$LogFile = (Join-Path $PSScriptRoot "build.log")
 )
 
 # "Continue": in Windows PowerShell 5.1, text that external programs write to
@@ -40,14 +47,40 @@ $PSDefaultParameterValues["*:ErrorAction"] = "Stop"   # cmdlets still stop on er
 $ProgressPreference    = "SilentlyContinue"           # much faster Invoke-WebRequest
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$Src        = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$Src        = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $SdrDllsUrl = "https://github.com/jopohl/sdrbuild/releases/download/v1.1/win-x64.zip"
 $PyVersion  = "3.13"
 if (-not $WorkDir) { $WorkDir = Join-Path $Src "build-windows" }
+New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+$WorkDir = (Resolve-Path -LiteralPath $WorkDir).Path
+
+try { Start-Transcript -Path $LogFile -Force | Out-Null } catch { Write-Host "[!] Cannot write the log file $LogFile" }
 
 function Info($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "[!] $m" -ForegroundColor Yellow }
-function Fail($m) { Write-Host "[x] $m" -ForegroundColor Red; exit 1 }
+function Fail($m) {
+    Write-Host "[x] $m" -ForegroundColor Red
+    try { Stop-Transcript | Out-Null } catch { }
+    exit 1
+}
+
+# Temporary files and pip cache inside the work folder (not the user profile)
+$TmpDir = Join-Path $WorkDir "tmp"
+New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
+$env:TEMP = $TmpDir
+$env:TMP = $TmpDir
+$env:PIP_CACHE_DIR = Join-Path $WorkDir "pip-cache"
+
+# The C/C++ compiler and some build tools have trouble with non-ASCII
+# characters and very long paths
+foreach ($p in @($Src, $WorkDir)) {
+    if ($p -match '[^\x00-\x7F]') {
+        Warn "The path '$p' contains non-ASCII characters (accents...). If the build fails, move it to a plain path such as C:\src\urh-ng."
+    }
+    if ($p.Length -gt 120) {
+        Warn "The path '$p' is long ($($p.Length) characters). If the build fails, move it to a shorter path such as C:\src\urh-ng."
+    }
+}
 
 # Run an external program and abort if it fails
 function Run {
@@ -68,7 +101,7 @@ $PyDir = ""; $GitDir = ""; $VsDir = ""; $InnoDir = ""
 function Add-DepsToPath {
     if ($DepsDir) {
         foreach ($d in (Join-Path $PyDir "Scripts"), $PyDir, (Join-Path $GitDir "cmd")) {
-            if (Test-Path $d) { $env:Path = "$d;$env:Path" }
+            if (Test-Path -LiteralPath $d) { $env:Path = "$d;$env:Path" }
         }
     }
 }
@@ -89,27 +122,31 @@ function Find-Python {
         $p = cmd /c "py -$PyVersion -c print(__import__('sys').executable) 2>nul"
         if ($LASTEXITCODE -eq 0 -and $p) { return $p.Trim() }
     }
-    if ($PyDir -and (Test-Path (Join-Path $PyDir "python.exe"))) { return (Join-Path $PyDir "python.exe") }
-    $cand = Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"
-    if (Test-Path $cand) { return $cand }
+    if ($PyDir -and (Test-Path -LiteralPath (Join-Path $PyDir "python.exe"))) { return (Join-Path $PyDir "python.exe") }
+    # Per-user and all-users installs from python.org / winget
+    foreach ($cand in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"),
+        (Join-Path $env:ProgramFiles "Python313\python.exe"))) {
+        if (Test-Path -LiteralPath $cand) { return $cand }
+    }
     return $null
 }
 
 function Find-Vs {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-    if (-not (Test-Path $vswhere)) { return $null }
+    if (-not (Test-Path -LiteralPath $vswhere)) { return $null }
     $r = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     if ($r) { return $r.Trim() }
     return $null
 }
 
 function Find-Iscc {
-    if ($InnoDir -and (Test-Path (Join-Path $InnoDir "ISCC.exe"))) { return (Join-Path $InnoDir "ISCC.exe") }
+    if ($InnoDir -and (Test-Path -LiteralPath (Join-Path $InnoDir "ISCC.exe"))) { return (Join-Path $InnoDir "ISCC.exe") }
     foreach ($p in @(
         (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
         (Join-Path $env:ProgramFiles      "Inno Setup 6\ISCC.exe"),
         (Join-Path $env:LOCALAPPDATA      "Programs\Inno Setup 6\ISCC.exe"))) {
-        if (Test-Path $p) { return $p }
+        if (Test-Path -LiteralPath $p) { return $p }
     }
     if (Have "iscc") { return (Get-Command iscc).Source }
     return $null
@@ -166,21 +203,20 @@ if (-not (Find-Vs)) { Fail "The C++ compiler is missing (Visual Studio Build Too
 Info "Python: $Python"
 
 # --------------------------------------------------------------------------- 2
-New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 Set-Location $Src
 
 $Shared = Join-Path $Src "src\urh\dev\native\lib\shared"
-if (-not (Test-Path (Join-Path $Shared "include"))) {
+if (-not (Test-Path -LiteralPath (Join-Path $Shared "include"))) {
     Info "Downloading the SDR driver DLLs (HackRF, RTL-SDR, Airspy, BladeRF, LimeSDR, PlutoSDR...)..."
     $zip = Join-Path $WorkDir "sdr-win-x64.zip"
     Invoke-WebRequest -Uri $SdrDllsUrl -OutFile $zip -UseBasicParsing
     New-Item -ItemType Directory -Force -Path $Shared | Out-Null
-    Expand-Archive -Path $zip -DestinationPath $Shared -Force
+    Expand-Archive -LiteralPath $zip -DestinationPath $Shared -Force
 }
 
 # --------------------------------------------------------------------------- 3
 $Venv = Join-Path $WorkDir "venv"
-if (-not (Test-Path (Join-Path $Venv "Scripts\python.exe"))) {
+if (-not (Test-Path -LiteralPath (Join-Path $Venv "Scripts\python.exe"))) {
     Info "Creating the Python virtual environment..."
     Run $Python @("-m", "venv", $Venv)
 }
@@ -193,19 +229,19 @@ Run $Py @("-m", "pip", "install", "pywin32", "pyaudio", "pyinstaller", "packagin
 
 Info "Building the Cython/C++ extensions..."
 # Same as the CI: 'release' marker so the extensions are not rebuilt at start-up
-New-Item -ItemType File -Force -Path (Join-Path $env:TEMP "urh_releasing") | Out-Null
+New-Item -ItemType File -Force -Path (Join-Path $TmpDir "urh_releasing") | Out-Null
 Run $Py @("src\urh\cythonext\build.py")
 
 # --------------------------------------------------------------------------- 4
 Info "Packaging with PyInstaller (takes a few minutes)..."
 foreach ($d in "pyinstaller", "urh_build", "urh_debug_build", "urh_cli_build") {
-    if (Test-Path $d) { Remove-Item -Recurse -Force $d }
+    if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
 }
 $env:Path = (Join-Path $Venv "Scripts") + ";" + $env:Path   # so 'pyinstaller' is found
 Run $Py @("data\pyinstaller_helper.py")
 
 $AppDir = Join-Path $Src "pyinstaller\urh"
-if (-not (Test-Path (Join-Path $AppDir "urh.exe"))) { Fail "PyInstaller did not create urh.exe." }
+if (-not (Test-Path -LiteralPath (Join-Path $AppDir "urh.exe"))) { Fail "PyInstaller did not create urh.exe." }
 
 Info "Testing the executable..."
 # Qt prints harmless "QThreadStorage" warnings on exit; show them as plain text
@@ -213,14 +249,14 @@ Info "Testing the executable..."
 if ($LASTEXITCODE -ne 0) { Warn "'urh_debug.exe autoclose' returned $LASTEXITCODE; check the output above." }
 
 # ------------------------------------------------------------------- decoders
-if ($DecodersDir -and (Test-Path $DecodersDir)) {
+if ($DecodersDir -and (Test-Path -LiteralPath $DecodersDir)) {
     Info "Bundling decoders from $DecodersDir..."
     $DecDest = Join-Path $AppDir "decoders"
-    if (Test-Path $DecDest) { Remove-Item -Recurse -Force $DecDest }
-    Copy-Item -Recurse -Path $DecodersDir -Destination $DecDest
-    Copy-Item (Join-Path $PSScriptRoot "install-decoders.ps1") $DecDest -Force
-    Copy-Item (Join-Path $PSScriptRoot "install-decoders.bat") $DecDest -Force
-    Get-ChildItem -Recurse -File $DecDest | ForEach-Object { Write-Host "      + $($_.FullName.Substring($DecDest.Length + 1))" }
+    if (Test-Path -LiteralPath $DecDest) { Remove-Item -LiteralPath $DecDest -Recurse -Force }
+    Copy-Item -Recurse -LiteralPath $DecodersDir -Destination $DecDest
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "install-decoders.ps1") -Destination $DecDest -Force
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "install-decoders.bat") -Destination $DecDest -Force
+    Get-ChildItem -Recurse -File -LiteralPath $DecDest | ForEach-Object { Write-Host "      + $($_.FullName.Substring($DecDest.Length + 1))" }
 } elseif ($DecodersDir) {
     Warn "${DecodersDir} does not exist: building without decoders."
 }
@@ -228,11 +264,11 @@ if ($DecodersDir -and (Test-Path $DecodersDir)) {
 $Version = (& $Py "src\urh\version.py").Trim()
 $Dist    = Join-Path $Src "dist"
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
-Get-ChildItem -Path $Dist -File -Filter "URH-NG-*" | Remove-Item -Force   # previous results
+Get-ChildItem -LiteralPath $Dist -File -Filter "URH-NG-*" | Remove-Item -Force   # previous results
 
 $Portable = Join-Path $Dist "URH-NG-$Version-win-x64-portable.zip"
 Info "Creating the portable version: $Portable"
-Compress-Archive -Path (Join-Path $AppDir "*") -DestinationPath $Portable
+Compress-Archive -LiteralPath (Get-ChildItem -LiteralPath $AppDir).FullName -DestinationPath $Portable
 
 # --------------------------------------------------------------------------- 5
 if (-not $NoInstaller) {
@@ -250,6 +286,7 @@ Write-Host ""
 Info "Build finished. Version: $Version"
 Write-Host "   Program folder : $AppDir  (urh.exe)"
 Write-Host "   Output files   : $Dist"
-Get-ChildItem $Dist | ForEach-Object { Write-Host "      - $($_.Name)" }
+Get-ChildItem -LiteralPath $Dist | ForEach-Object { Write-Host "      - $($_.Name)" }
 Write-Host ""
 Write-Host "   To use USB SDRs (HackRF, RTL-SDR...) install the WinUSB driver with Zadig: https://zadig.akeo.ie"
+try { Stop-Transcript | Out-Null } catch { }

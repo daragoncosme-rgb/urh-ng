@@ -147,7 +147,7 @@ Both include the decoders from `data/decoders`. To keep all tools and
 temporary files on another drive:
 
 ```bat
-data\windows\build.bat -WorkDir G:\urh-ng-build -DepsDir G:\urh-ng-build\deps
+data\windows\build.bat -WorkDir "D:\urh-ng build" -DepsDir "D:\urh-ng build\deps"
 ```
 
 For USB SDRs (HackRF, RTL-SDR...) install the WinUSB driver with [Zadig](https://zadig.akeo.ie).

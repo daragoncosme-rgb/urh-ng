@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 
 HIDDEN_IMPORTS = [
@@ -19,19 +20,19 @@ DATA = [
 EXCLUDE = ["matplotlib"]
 
 
-def run_pyinstaller(cmd_list: list, env: list = None):
-    cmd = " ".join(cmd_list)
-    print(cmd, flush=True)
-
-    env = [] if env is None else env
-    if env:
-        os.system(" ".join(env) + " " + cmd)
-    else:
-        os.system(cmd)
+def run_pyinstaller(cmd_list: list, env: dict = None):
+    # Pass the arguments as a list (no shell): paths with spaces or other
+    # special characters work without extra quoting.
+    print(subprocess.list2cmdline(cmd_list), flush=True)
+    full_env = dict(os.environ)
+    full_env.update(env or {})
+    result = subprocess.run(cmd_list, env=full_env)
+    if result.returncode != 0:
+        sys.exit("PyInstaller failed with exit code {}".format(result.returncode))
 
 
 if __name__ == "__main__":
-    cmd = ["pyinstaller", "--clean"]
+    cmd = [sys.executable, "-m", "PyInstaller", "--clean"]
     if sys.platform == "darwin":
         cmd.append("--onefile")
 
@@ -40,7 +41,7 @@ if __name__ == "__main__":
 
     for src, dst in DATA:
         cmd.append("--add-data")
-        cmd.append('"{}{}{}"'.format(src, os.pathsep, dst))
+        cmd.append("{}{}{}".format(src, os.pathsep, dst))
 
     for exclude in EXCLUDE:
         cmd.append("--exclude-module={}".format(exclude))
@@ -49,12 +50,10 @@ if __name__ == "__main__":
 
     if sys.platform == "darwin":
         cmd.append(
-            '--icon="{}"'.format(os.path.join(urh_path, "data/icons/appicon.icns"))
+            "--icon={}".format(os.path.join(urh_path, "data/icons/appicon.icns"))
         )
     else:
-        cmd.append(
-            '--icon="{}"'.format(os.path.join(urh_path, "data/icons/appicon.ico"))
-        )
+        cmd.append("--icon={}".format(os.path.join(urh_path, "data/icons/appicon.ico")))
 
     cmd.extend(["--distpath", "./pyinstaller"])
 
@@ -82,7 +81,7 @@ if __name__ == "__main__":
     os.makedirs("./pyinstaller")
     if sys.platform == "darwin":
         run_pyinstaller(
-            urh_cmd, env=["DYLD_LIBRARY_PATH=src/urh/dev/native/lib/shared"]
+            urh_cmd, env={"DYLD_LIBRARY_PATH": "src/urh/dev/native/lib/shared"}
         )
 
         import plistlib
