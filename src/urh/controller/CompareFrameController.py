@@ -149,6 +149,16 @@ class CompareFrameController(QWidget):
             )
         )
         self.keeloq_codeword_action.triggered.connect(self.on_keeloq_codeword_triggered)
+        self.external_tool_action = self.analyze_menu.addAction(
+            self.tr("Run external tool...")
+        )
+        self.external_tool_action.setToolTip(
+            self.tr(
+                "Run an external program, passing the checked messages as "
+                "encrypted:serial:button arguments."
+            )
+        )
+        self.external_tool_action.triggered.connect(self.on_external_tool_triggered)
         self.analyze_menu.addSeparator()
         self.signal_studio_action = self.analyze_menu.addAction(
             self.tr("Open in URH Signal Studio")
@@ -1597,6 +1607,69 @@ class CompareFrameController(QWidget):
         )
         dialog = KeeLoqCodeWordDialog(messages, sample_rate=sample_rate, parent=self)
         dialog.send_to_toolkit.connect(self._send_packet_to_crypto_toolkit)
+        self._show_modeless(dialog)
+
+    def __choose_external_tool(self):
+        from urh.util import ExternalTool
+
+        current = ExternalTool.get_executable()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("Select the program to run"),
+            os.path.dirname(current) if current else os.path.expanduser("~"),
+            self.tr(
+                "Programs and scripts (*.exe *.bat *.cmd);;"
+                "Executable (*.exe);;Batch script (*.bat *.cmd);;All files (*)"
+            )
+            if os.name == "nt"
+            else self.tr("Batch script (*.bat *.cmd);;All files (*)"),
+        )
+        if path:
+            ExternalTool.set_executable(path)
+        return path or None
+
+    def on_external_tool_triggered(self):
+        """
+        Run an external program, passing the KeeLoq fields of the checked
+        messages as encrypted:serial:button arguments. The first time, asks
+        where the program is and remembers it for next time.
+        """
+        from urh.controller.dialogs.ExternalToolDialog import ExternalToolDialog
+        from urh.util import ExternalTool
+
+        messages = self.proto_analyzer.messages
+        if not messages:
+            QMessageBox.information(
+                self,
+                self.tr("No messages"),
+                self.tr(
+                    "There are no protocol messages to analyze. "
+                    "Please demodulate a signal first."
+                ),
+            )
+            return
+
+        if not ExternalTool.get_executable():
+            QMessageBox.information(
+                self,
+                self.tr("Run external tool"),
+                self.tr(
+                    "Select the program to run. You can change it again "
+                    "later from this dialog's 'Change...' button."
+                ),
+            )
+            if not self.__choose_external_tool():
+                return
+
+        sample_rate = next(
+            (
+                p.signal.sample_rate
+                for p in self.protocol_list
+                if p.signal is not None and p.signal.sample_rate
+            ),
+            None,
+        )
+        dialog = ExternalToolDialog(messages, sample_rate=sample_rate, parent=self)
         self._show_modeless(dialog)
 
     def _send_packet_to_crypto_toolkit(self, encrypted, serial, encrypted2):

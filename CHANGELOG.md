@@ -5,6 +5,14 @@ All notable changes to URH-NG are documented here.
 ## [Unreleased]
 
 ### Added
+- **"Run external tool..." in the *Analyze Protocol* menu.** Lets you run any
+  external program or `.bat`/`.cmd` script, passing the messages you check as
+  `encrypted:serial:button` arguments (decoded the same way as the KeeLoq
+  code word decoder, so only valid code words are listed). The first time,
+  it asks where the program is and remembers the path; a "Change..." button
+  lets you pick a different one later. "Extra parameters" are added before
+  the checked messages' arguments and "Final parameters" (default `-b -t91`)
+  after them, both editable and remembered too.
 - **KeeLoq code word decoder (PWM)** in the *Analyze Protocol* menu. It decodes
   the messages of the protocol table as KeeLoq code words (HCS200/300/301):
   encrypted portion, serial number, button code (S3/S0/S1/S2), battery and
