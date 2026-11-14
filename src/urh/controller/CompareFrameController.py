@@ -139,6 +139,16 @@ class CompareFrameController(QWidget):
             self.tr("Crypto Toolkit (KeeLoq, TEA, AES...)")
         )
         self.crypto_toolkit_action.triggered.connect(self.on_keeloq_decoder_triggered)
+        self.keeloq_codeword_action = self.analyze_menu.addAction(
+            self.tr("KeeLoq code word decoder (PWM)...")
+        )
+        self.keeloq_codeword_action.setToolTip(
+            self.tr(
+                "Decode the messages as KeeLoq code words: encrypted portion, "
+                "serial number, button code, battery and repeat flags."
+            )
+        )
+        self.keeloq_codeword_action.triggered.connect(self.on_keeloq_codeword_triggered)
         self.analyze_menu.addSeparator()
         self.signal_studio_action = self.analyze_menu.addAction(
             self.tr("Open in URH Signal Studio")
@@ -1559,6 +1569,52 @@ class CompareFrameController(QWidget):
             serial=serial,
             cipher_hint=cipher_hint,
         )
+        self._show_modeless(dialog)
+
+    def on_keeloq_codeword_triggered(self):
+        """Decode the protocol messages as KeeLoq code words (PWM)."""
+        from urh.controller.dialogs.KeeLoqCodeWordDialog import KeeLoqCodeWordDialog
+
+        messages = self.proto_analyzer.messages
+        if not messages:
+            QMessageBox.information(
+                self,
+                self.tr("No messages"),
+                self.tr(
+                    "There are no protocol messages to analyze. "
+                    "Please demodulate a signal first."
+                ),
+            )
+            return
+
+        sample_rate = next(
+            (
+                p.signal.sample_rate
+                for p in self.protocol_list
+                if p.signal is not None and p.signal.sample_rate
+            ),
+            None,
+        )
+        dialog = KeeLoqCodeWordDialog(messages, sample_rate=sample_rate, parent=self)
+        dialog.send_to_toolkit.connect(self._send_packet_to_crypto_toolkit)
+        self._show_modeless(dialog)
+
+    def _send_packet_to_crypto_toolkit(self, encrypted, serial, encrypted2):
+        """Fill an open Crypto Toolkit, or open a new one, with the given packet."""
+        from urh.controller.dialogs.KeeLoqDialog import KeeLoqDialog
+
+        for dialog in list(getattr(self, "_modeless_dialogs", [])):
+            if isinstance(dialog, KeeLoqDialog):
+                try:
+                    dialog.set_packet(encrypted, serial, encrypted2)
+                    dialog.raise_()
+                    return
+                except RuntimeError:
+                    pass  # dialog already closed
+
+        dialog = KeeLoqDialog(parent=self, encrypted=encrypted, serial=serial)
+        if encrypted2 is not None:
+            dialog.set_encrypted2(encrypted2)
         self._show_modeless(dialog)
 
     @staticmethod

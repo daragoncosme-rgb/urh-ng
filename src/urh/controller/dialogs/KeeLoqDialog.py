@@ -175,6 +175,17 @@ class KeeLoqDialog(QDialog):
         # visible, without stealing keyboard focus from the protocol table.
         self._tabs.setCurrentIndex(0)
 
+    def set_packet(self, encrypted: int, serial: int, encrypted2=None):
+        """
+        Fill "Encrypted #1" and "Serial/ID" (and "Encrypted #2" when given),
+        e.g. from the KeeLoq code word decoder.
+        """
+        self.edit_encrypted.setText("{0:08X}".format(encrypted & 0xFFFFFFFF))
+        self.edit_serial.setText("{0:07X}".format(serial & 0xFFFFFFF))
+        if encrypted2 is not None:
+            self.edit_encrypted2.setText("{0:08X}".format(encrypted2 & 0xFFFFFFFF))
+        self._tabs.setCurrentIndex(0)
+
     # ── Decoder Tab ──────────────────────────────────
 
     def _build_decoder_tab(self):

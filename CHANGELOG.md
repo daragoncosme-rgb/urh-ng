@@ -5,6 +5,14 @@ All notable changes to URH-NG are documented here.
 ## [Unreleased]
 
 ### Added
+- **KeeLoq code word decoder (PWM)** in the *Analyze Protocol* menu. It decodes
+  the messages of the protocol table as KeeLoq code words (HCS200/300/301):
+  encrypted portion, serial number, button code (S3/S0/S1/S2), battery and
+  repeat flags, plus the measured TE in microseconds, and can send the selected
+  rows to the Crypto Toolkit (Encrypted #1/#2 and serial). It works when one
+  symbol is not exactly one TE and when the last bit is cut by the pause. Based
+  on the PulseView decoder by Andrea Orazi
+  (https://github.com/rzondr/KeeLoq_decoder, GPL v2+).
 - **Spectrum Analyzer view selector and radio presets.** A dropdown now lets
   you switch the Spectrum Analyzer between "Classic URH" and an "Averaged
   (dB)" view with configurable FFT size, window and averaging, plus waterfall
