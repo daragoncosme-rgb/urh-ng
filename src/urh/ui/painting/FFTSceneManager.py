@@ -11,6 +11,10 @@ from urh.ui.painting.SceneManager import SceneManager
 class FFTSceneManager(SceneManager):
     def __init__(self, parent, graphic_view=None):
         self.peak = []
+        # Vertical range (bottom, top) in log10 units of plot_data, or None for
+        # the classic fixed range of -5..5
+        self.y_range = None
+        self.peak_hold = True
 
         super().__init__(parent)
         self.scene = GridScene(parent=graphic_view)
@@ -29,7 +33,9 @@ class FFTSceneManager(SceneManager):
         self.set_path(paths, colors=None)
 
         try:
-            if len(self.peak) > 0:
+            if not self.peak_hold:
+                self.peak_item.setPath(QPainterPath())
+            elif len(self.peak) > 0:
                 peak_path = path_creator.create_path(np.log10(self.peak), start, end)[0]
                 self.peak_item.setPath(peak_path)
         except RuntimeWarning:
@@ -40,10 +46,15 @@ class FFTSceneManager(SceneManager):
 
         self.peak = (
             self.plot_data
-            if len(self.peak) < self.num_samples
+            if len(self.peak) != self.num_samples
             else np.maximum(self.peak, self.plot_data)
         )
-        self.scene.setSceneRect(0, -5, self.num_samples, 10)
+        if self.y_range is None:
+            self.scene.setSceneRect(0, -5, self.num_samples, 10)
+        else:
+            bottom, top = self.y_range
+            # Path y values are negated, so the top of the range is -top
+            self.scene.setSceneRect(0, -top, self.num_samples, top - bottom)
 
     def clear_path(self):
         for item in self.scene.items():

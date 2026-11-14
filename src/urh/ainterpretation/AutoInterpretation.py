@@ -91,6 +91,89 @@ def detect_noise_level(magnitudes):
     return math.ceil(result * 10000) / 10000
 
 
+def smooth_magnitudes(magnitudes: np.ndarray, window: int = 8) -> np.ndarray:
+    """Moving average of the magnitudes (float32, same length)."""
+    if window <= 1 or len(magnitudes) < 4 * window:
+        return magnitudes
+    # moving average via cumulative sum: O(n) for any window
+    c = np.cumsum(magnitudes, dtype=np.float64)
+    c = np.concatenate(([0.0], c))
+    avg = ((c[window:] - c[:-window]) / window).astype(np.float32)
+    # same length and alignment as the input (pad with the edge values)
+    left = window // 2
+    right = len(magnitudes) - len(avg) - left
+    return np.concatenate(
+        (np.full(left, avg[0], np.float32), avg, np.full(right, avg[-1], np.float32))
+    )
+
+
+def estimate_weak_ook(magnitudes: np.ndarray, noise: float, window: int = 32):
+    """
+    Bit length, center and tolerance of a weak on/off keyed signal.
+
+    The magnitudes are smoothed and turned into on/off with hysteresis, so the
+    pulses are not split by samples that dip into the noise. Returns None if
+    no clear pulse lengths are found.
+
+    :return: (bit_length, center in magnitude units, tolerance) or None
+    """
+    smoothed = smooth_magnitudes(magnitudes, window)
+    above_noise = smoothed[smoothed > 2 * noise]
+    if len(above_noise) < 10 * window:
+        return None
+    level = float(np.median(above_noise))
+    high = noise + 0.5 * (level - noise)
+    low = noise + 0.2 * (level - noise)
+
+    # hysteresis: keep the last decided state between the two thresholds
+    decided = np.flatnonzero((smoothed > high) | (smoothed < low))
+    if len(decided) < 2:
+        return None
+    # forward fill the last decided state
+    last = np.full(len(smoothed), -1, dtype=np.int64)
+    last[decided] = decided
+    np.maximum.accumulate(last, out=last)
+    on = (smoothed[np.maximum(last, 0)] > high) & (last >= 0)
+
+    edges = np.flatnonzero(np.diff(on.astype(np.int8)))
+    if len(edges) < 4:
+        return None
+    runs = np.diff(edges)
+    first_is_on = bool(on[edges[0] + 1])
+    on_runs = runs[0::2] if first_is_on else runs[1::2]
+    off_runs = runs[1::2] if first_is_on else runs[0::2]
+    # drop blips; long pauses between messages are not bits either
+    typical = np.median(on_runs) if len(on_runs) else 0
+    if typical <= 0:
+        return None
+    lengths = np.concatenate((on_runs, off_runs))
+    lengths = lengths[(lengths >= 0.3 * typical) & (lengths <= 12 * typical)]
+    if len(lengths) < 8:
+        return None
+
+    tolerance = max(1, int(0.08 * np.percentile(lengths, 10)))
+    merged = merge_plateau_lengths(lengths.astype(np.uint64), tolerance)
+    if len(merged) < 2:
+        return None
+    bit_length = get_bit_length_from_plateau_lengths(merged)
+    if bit_length is None or bit_length <= tolerance:
+        return None
+
+    # refine: every run is a whole number of bits, average the bit length
+    # over runs of 1-4 bits (the GCD above is rounded down by the tolerance)
+    multiples = np.round(lengths / bit_length)
+    usable = (multiples >= 1) & (multiples <= 4)
+    usable &= np.abs(lengths - multiples * bit_length) <= 0.2 * bit_length
+    if np.count_nonzero(usable) >= 8:
+        bit_length = int(round(np.median(lengths[usable] / multiples[usable])))
+        tolerance = max(tolerance, int(0.05 * bit_length))
+
+    # Per sample, a weak pulse often falls close to the noise: the center must
+    # stay just above the noise or the pulses break apart when demodulating
+    center = noise + 0.15 * (level - noise)
+    return int(bit_length), center, tolerance
+
+
 def segment_messages_from_magnitudes(magnitudes: np.ndarray, noise_threshold: float):
     """
     Get the list of start, end indices of messages
@@ -290,7 +373,23 @@ def detect_modulation(data: np.ndarray, wavelet_scale=4, median_filter_order=11)
     return "OOK"
 
 
+def is_pulse_train(message_indices: list) -> bool:
+    """
+    True if the segments are short pulses grouped into messages (on/off
+    keying): many segments merge into few messages. Each OOK pulse alone is
+    a constant carrier, so the per-segment detection below took the pulses
+    of remote controls for FSK.
+    """
+    if len(message_indices) < 8:
+        return False
+    merged = merge_message_segments_for_ook(message_indices)
+    return len(message_indices) >= 4 * max(len(merged), 1)
+
+
 def detect_modulation_for_messages(signal: IQArray, message_indices: list) -> str:
+    if is_pulse_train(message_indices):
+        return "OOK"
+
     max_messages = 100
 
     modulations_for_messages = []
@@ -458,15 +557,40 @@ def estimate(iq_array: IQArray, noise: float = None, modulation: str = None) -> 
         iq_array = IQArray(iq_array)
 
     magnitudes = iq_array.magnitudes
+    # Smooth the magnitudes a little before finding the noise level and the
+    # messages: with weak signals (e.g. RTL-SDR at low gain, values of a few
+    # ADC steps) single noise samples are as high as the signal, the noise
+    # threshold came out above the signal and messages fell apart into
+    # hundreds of fragments (wrong samples/symbol of 3 or 10).
+    smoothed = smooth_magnitudes(magnitudes)
+
+    weak_signal = False
     # find noise threshold
-    noise = detect_noise_level(magnitudes) if noise is None else noise
+    if noise is None:
+        noise = detect_noise_level(magnitudes)
+        noise_smoothed = detect_noise_level(smoothed)
+        above = smoothed[smoothed > noise_smoothed]
+        signal_level = float(np.median(above)) if len(above) else 0.0
+        if signal_level > 0 and noise > 0.6 * signal_level:
+            # Noise peaks reach the signal: the raw threshold would cut the
+            # signal into pieces, use the threshold of the smoothed magnitudes
+            noise = noise_smoothed
+            segment_magnitudes = smoothed
+            weak_signal = True
+        else:
+            segment_magnitudes = magnitudes
+    else:
+        segment_magnitudes = (
+            smoothed if noise < float(np.max(magnitudes)) else magnitudes
+        )
 
     # segment messages
     message_indices = segment_messages_from_magnitudes(
-        magnitudes, noise_threshold=noise
+        segment_magnitudes, noise_threshold=noise
     )
 
     # detect modulation
+    modulation_detected = modulation is None
     modulation = (
         detect_modulation_for_messages(iq_array, message_indices)
         if modulation is None
@@ -475,10 +599,46 @@ def estimate(iq_array: IQArray, noise: float = None, modulation: str = None) -> 
     if modulation is None:
         return None
 
-    if modulation == "OOK":
+    if weak_signal and len(message_indices) > 2:
+        # drop noise blips that cross the low threshold for a few samples,
+        # otherwise they define the "shortest pulse" and nothing gets merged
+        lengths = np.array([e - s for s, e in message_indices])
+        typical = np.median(lengths[lengths > 8]) if np.any(lengths > 8) else 0
+        min_len = max(4, int(0.1 * typical))
+        message_indices = [(s, e) for s, e in message_indices if e - s >= min_len]
+
+    if modulation in ("OOK", "ASK"):
+        # Pulses of on/off keyed remotes are separate segments: merge the
+        # segments between long pauses into messages. ASK signals that never
+        # go silent inside a message are already one segment per message.
         message_indices = merge_message_segments_for_ook(message_indices)
 
-    if modulation == "OOK" or modulation == "ASK":
+    # The modulation detection is unreliable on weak signals (it said FSK for
+    # an OOK remote at low gain): if on/off pulses are clearly found, use ASK
+    if weak_signal and (modulation in ("OOK", "ASK") or modulation_detected):
+        weak = estimate_weak_ook(magnitudes, noise)
+        if weak is not None:
+            bit_length, center_raw, tolerance = weak
+            scale = float(np.max(magnitudes)) / max(
+                float(np.max(np.abs(iq_array.as_complex64()))), 1e-12
+            )
+            return {
+                "modulation_type": "ASK",
+                "bit_length": bit_length,
+                "center": center_raw / scale,
+                "tolerance": int(tolerance),
+                "noise": noise,
+            }
+
+    if (modulation == "OOK" or modulation == "ASK") and weak_signal:
+        # Demodulate the smoothed magnitudes: per sample, a weak signal jumps
+        # between 0 and a few ADC steps and the plateaus (and the bit length)
+        # came out a few samples long
+        normalized = np.abs(iq_array.as_complex64()).astype(np.float32)
+        scale = float(np.max(magnitudes)) / max(float(np.max(normalized)), 1e-12)
+        normalized = smooth_magnitudes(normalized)
+        data = np.where(normalized >= noise / scale, normalized, 0).astype(np.float32)
+    elif modulation == "OOK" or modulation == "ASK":
         data = signal_functions.afp_demod(iq_array.data, noise, "ASK", 2)
     elif modulation == "FSK":
         data = signal_functions.afp_demod(iq_array.data, noise, "FSK", 2)
@@ -534,12 +694,15 @@ def estimate(iq_array: IQArray, noise: float = None, modulation: str = None) -> 
         return None
 
     bit_length = get_most_frequent_value(bit_lengths)
-    if bit_length is None:
-        return None
 
     try:
         tolerance = np.percentile(tolerances, 50)
     except IndexError:
+        tolerance = None
+
+    if bit_length is None:
+        return None
+    if tolerance is None:
         # no tolerances found, default to 5% of bit length
         tolerance = max(1, int(0.05 * bit_length))
 

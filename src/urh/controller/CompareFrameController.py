@@ -14,6 +14,7 @@ from PyQt6.QtCore import (
     QItemSelectionModel,
     QLocale,
     QModelIndex,
+    QProcess,
 )
 from PyQt6.QtGui import QContextMenuEvent, QIcon, QUndoStack
 from PyQt6.QtWidgets import (
@@ -23,6 +24,10 @@ from PyQt6.QtWidgets import (
     QWidget,
     QHeaderView,
     QInputDialog,
+    QApplication,
+    QHBoxLayout,
+    QToolButton,
+    QFileDialog,
 )
 
 from urh import settings
@@ -45,7 +50,7 @@ from urh.signalprocessing.ProtocolGroup import ProtocolGroup
 from urh.ui.delegates.ComboBoxDelegate import ComboBoxDelegate
 from urh.ui.delegates.MessageTypeButtonDelegate import MessageTypeButtonDelegate
 from urh.ui.ui_analysis import Ui_TabAnalysis
-from urh.util import FileOperator, util
+from urh.util import FileOperator, util, SignalStudio
 from urh.util.Errors import Errors
 from urh.util.Formatter import Formatter
 from urh.util.Logger import logger
@@ -134,7 +139,37 @@ class CompareFrameController(QWidget):
             self.tr("Crypto Toolkit (KeeLoq, TEA, AES...)")
         )
         self.crypto_toolkit_action.triggered.connect(self.on_keeloq_decoder_triggered)
+        self.analyze_menu.addSeparator()
+        self.signal_studio_action = self.analyze_menu.addAction(
+            self.tr("Open in URH Signal Studio")
+        )
+        self.signal_studio_action.triggered.connect(self.on_btn_signal_studio_clicked)
+        self.choose_signal_studio_action = self.analyze_menu.addAction(
+            self.tr("Choose URH Signal Studio program...")
+        )
+        self.choose_signal_studio_action.triggered.connect(
+            self.on_choose_signal_studio_triggered
+        )
         self.ui.btnAnalyze.setMenu(self.analyze_menu)
+
+        # "Signal Studio" button next to "Analyze Protocol"
+        self.ui.verticalLayout_8.removeWidget(self.ui.btnAnalyze)
+        analyze_row = QHBoxLayout()
+        analyze_row.setContentsMargins(0, 0, 0, 0)
+        analyze_row.setSpacing(2)
+        analyze_row.addWidget(self.ui.btnAnalyze, 1)
+        self.ui.btnSignalStudio = QToolButton(parent=self.ui.pageButtonAnalyzer)
+        self.ui.btnSignalStudio.setText(self.tr("Signal Studio"))
+        self.ui.btnSignalStudio.setToolTip(
+            self.tr(
+                "Open the protocol table (messages, decodings and labels) "
+                "in URH Signal Studio."
+            )
+        )
+        self.ui.btnSignalStudio.setSizePolicy(self.ui.btnAnalyze.sizePolicy())
+        analyze_row.addWidget(self.ui.btnSignalStudio)
+        self.ui.verticalLayout_8.addLayout(analyze_row)
+        self.ui.btnSignalStudio.clicked.connect(self.on_btn_signal_studio_clicked)
 
         self.ui.lblShownRows.hide()
         self.ui.lblClearAlignment.hide()
@@ -1346,6 +1381,52 @@ class CompareFrameController(QWidget):
         self.protocol_model.update()
         self.ui.tblViewProtocol.resize_columns()
 
+    MAX_MESSAGES_FOR_LABEL_SEARCH = 1500
+
+    def __ask_max_messages_for_label_search(self):
+        """
+        The label search compares every pair of messages: with thousands of
+        messages (usually noise from wrong demodulation settings) it takes
+        minutes and the window does not respond.
+
+        :return: None = all messages, 0 = cancel, otherwise number of messages
+        """
+        n = len(self.proto_analyzer.messages)
+        limit = self.MAX_MESSAGES_FOR_LABEL_SEARCH
+        if n <= limit:
+            return None
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(self.tr("Many messages"))
+        box.setText(
+            self.tr(
+                "The protocol has {0} messages. Finding labels compares every "
+                "pair of messages and can take many minutes for all of them."
+                "\n\nSo many messages often mean the signal was demodulated "
+                "with wrong settings (Noise, Samples/Symbol, Modulation) and "
+                "most of them are noise. Check the Interpretation tab first."
+            ).format(n)
+        )
+        first = box.addButton(
+            self.tr("Analyze the first {0}").format(limit),
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        all_btn = box.addButton(
+            self.tr("Analyze all (slow)"), QMessageBox.ButtonRole.DestructiveRole
+        )
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(first)
+        self.unsetCursor()
+        box.exec()
+        self.setCursor(Qt.CursorShape.WaitCursor)
+        clicked = box.clickedButton()
+        if clicked == first:
+            return limit
+        if clicked == all_btn:
+            return None
+        return 0
+
     @pyqtSlot()
     def on_btn_analyze_clicked(self):
         self.setCursor(Qt.CursorShape.WaitCursor)
@@ -1371,10 +1452,17 @@ class CompareFrameController(QWidget):
             "%p% (Find new labels/message types)"
         )
         self.ui.progressBarLogicAnalyzer.setValue(75)
+        QApplication.processEvents()
 
         if self.assign_labels_action.isChecked():
+            max_messages = self.__ask_max_messages_for_label_search()
+            if max_messages == 0:
+                # cancelled
+                self.unsetCursor()
+                self.ui.stackedWidgetLogicAnalysis.setCurrentIndex(0)
+                return
             try:
-                self.proto_analyzer.auto_assign_labels()
+                self.proto_analyzer.auto_assign_labels(max_messages=max_messages)
                 self.protocol_model.update()
                 self.label_value_model.update()
                 self.message_type_table_model.update()
@@ -1471,7 +1559,46 @@ class CompareFrameController(QWidget):
             serial=serial,
             cipher_hint=cipher_hint,
         )
-        dialog.exec()
+        self._show_modeless(dialog)
+
+    @staticmethod
+    def _encrypted_from_message(msg):
+        """
+        Return the 32-bit "encrypted" field of a message as an int, or None if
+        the message has no such label. Same bit order as the Crypto Toolkit's
+        "Encrypted #1" box.
+        """
+        if msg is None:
+            return None
+        bits = msg.decoded_bits_str or msg.plain_bits_str
+        for label in msg.message_type:
+            if "encrypted" in label.name.lower():
+                field_bits = bits[label.start : label.end]
+                if len(field_bits) >= 32:
+                    return int(field_bits[:32][::-1], 2)
+        return None
+
+    def __fill_crypto_toolkit_encrypted2(self, message):
+        """
+        While a Crypto Toolkit (KeeLoqDialog) is open, copy the clicked
+        message's "encrypted" field into its "Encrypted #2" box, so the second
+        capture for the key bruteforce is filled just by selecting a row.
+        """
+        dialogs = getattr(self, "_modeless_dialogs", None)
+        if not dialogs:
+            return
+        encrypted = self._encrypted_from_message(message)
+        if encrypted is None:
+            return
+        from urh.controller.dialogs.KeeLoqDialog import KeeLoqDialog
+
+        for dialog in list(dialogs):
+            if isinstance(dialog, KeeLoqDialog):
+                try:
+                    dialog.set_encrypted2(encrypted)
+                except RuntimeError:
+                    # dialog already closed (C++ object gone)
+                    pass
 
     @pyqtSlot()
     def on_auto_identify_protocol_triggered(self):
@@ -1493,8 +1620,19 @@ class CompareFrameController(QWidget):
         self.setCursor(Qt.CursorShape.WaitCursor)
 
         try:
-            matcher = ProtocolMatcher(messages, self.decodings)
-            matches = matcher.find_matches(max_results=30)
+            sample_rate = next(
+                (
+                    p.signal.sample_rate
+                    for p in self.protocol_list
+                    if p.signal is not None and p.signal.sample_rate
+                ),
+                None,
+            )
+            matcher = ProtocolMatcher(
+                messages, self.decodings, sample_rate=sample_rate, prefer_remotes=True
+            )
+            # more results so the dialog can filter by device type
+            matches = matcher.find_matches(max_results=80)
         except Exception as e:
             self.unsetCursor()
             Errors.exception(e)
@@ -1523,7 +1661,98 @@ class CompareFrameController(QWidget):
 
         dialog = ProtocolMatchDialog(matches, parent=self)
         dialog.match_selected.connect(self._apply_protocol_match)
-        dialog.exec()
+        self._show_modeless(dialog)
+
+    def __choose_signal_studio(self):
+        current = SignalStudio.get_executable(search=False) or ""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("Select URH Signal Studio"),
+            os.path.dirname(current) if current else os.path.expanduser("~"),
+            self.tr(
+                "URH Signal Studio (UrhSignalStudio.exe);;Programs (*.exe);;All files (*)"
+            ),
+        )
+        if path:
+            SignalStudio.set_executable(path)
+        return path or None
+
+    @pyqtSlot()
+    def on_choose_signal_studio_triggered(self):
+        self.__choose_signal_studio()
+
+    @pyqtSlot()
+    def on_btn_signal_studio_clicked(self):
+        if not self.proto_analyzer.messages:
+            QMessageBox.information(
+                self,
+                self.tr("No messages"),
+                self.tr("There are no protocol messages. Demodulate a signal first."),
+            )
+            return
+
+        self.setCursor(Qt.CursorShape.WaitCursor)
+        try:
+            exe = SignalStudio.get_executable()
+        finally:
+            self.unsetCursor()
+        if exe is None:
+            QMessageBox.information(
+                self,
+                self.tr("URH Signal Studio"),
+                self.tr(
+                    "URH Signal Studio was not found. Select UrhSignalStudio.exe "
+                    "(for example in UrhSignalStudio\\bin\\Release\\net8.0-windows)."
+                ),
+            )
+            exe = self.__choose_signal_studio()
+            if exe is None:
+                return
+
+        name = "_".join(p.name for p in self.protocol_list if p.name) or "protocol"
+        try:
+            filename = SignalStudio.export_protocol(
+                self.proto_analyzer,
+                self.decodings,
+                self.project_manager.participants,
+                name=name[:80],
+            )
+        except Exception as e:
+            Errors.exception(e)
+            return
+
+        started = QProcess.startDetached(exe, [filename], os.path.dirname(exe))
+        if isinstance(started, tuple):
+            started = started[0]
+        if not started:
+            QMessageBox.warning(
+                self,
+                self.tr("URH Signal Studio"),
+                self.tr(
+                    "Could not start\n{0}\n\nThe protocol was saved to\n{1}"
+                ).format(exe, filename),
+            )
+
+    def _show_modeless(self, dialog):
+        """
+        Show a tool dialog without blocking the main window, so values can be
+        copied from the protocol table while the dialog is open.
+        """
+        dialog.setModal(False)
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        if not hasattr(self, "_modeless_dialogs"):
+            self._modeless_dialogs = []
+        # keep a reference until the dialog is closed
+        self._modeless_dialogs.append(dialog)
+        dialog.destroyed.connect(
+            lambda *_, d=dialog: self._modeless_dialogs.remove(d)
+            if d in self._modeless_dialogs
+            else None
+        )
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _apply_protocol_match(self, match):
         """Apply a selected protocol match: decoder + message type with labels.
@@ -2360,6 +2589,8 @@ class CompareFrameController(QWidget):
             "..." if different_encodings else message.decoder.name
         )
         self.ui.cbDecoding.blockSignals(False)
+
+        self.__fill_crypto_toolkit_encrypted2(message)
 
         self.updateUI(ignore_table_model=True, resize_table=False)
 

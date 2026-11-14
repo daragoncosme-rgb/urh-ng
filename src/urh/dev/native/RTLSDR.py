@@ -1,3 +1,4 @@
+import time
 from collections import OrderedDict
 
 import numpy as np
@@ -38,15 +39,72 @@ class RTLSDR(Device):
         ctrl_connection.send("OPEN (#{}):{}".format(device_number, ret))
         return ret == 0
 
+    _last_frequency = None
+
+    @classmethod
+    def process_command(cls, command, ctrl_connection, is_tx: bool):
+        result = super().process_command(command, ctrl_connection, is_tx)
+        if isinstance(command, tuple):
+            tag, value = command
+            if tag == cls.Command.SET_FREQUENCY.name:
+                cls._last_frequency = value
+            elif (
+                tag == cls.Command.SET_DIRECT_SAMPLING_MODE.name
+                and cls._last_frequency is not None
+            ):
+                # Changing the direct sampling mode re-initializes the tuner
+                super().process_command(
+                    (cls.Command.SET_FREQUENCY.name, cls._last_frequency),
+                    ctrl_connection,
+                    is_tx,
+                )
+        return result
+
+    @classmethod
+    def init_device(
+        cls, ctrl_connection: Connection, is_tx: bool, parameters: OrderedDict
+    ) -> bool:
+        if not super().init_device(ctrl_connection, is_tx, parameters):
+            return False
+
+        # Right after opening, the tuner sometimes rejects the first frequency
+        # (error -9) and keeps receiving on another frequency: the window then
+        # only shows noise. Check the frequency and tune again if needed.
+        freq = parameters.get(cls.Command.SET_FREQUENCY.name)
+        if freq is not None:
+            for _ in range(3):
+                try:
+                    tuned = rtlsdr.get_center_freq()
+                except Exception:
+                    break
+                if abs(int(tuned) - int(freq)) <= 1:
+                    break
+                time.sleep(0.05)
+                cls.process_command(
+                    (cls.Command.SET_FREQUENCY.name, freq), ctrl_connection, is_tx
+                )
+        return True
+
     @classmethod
     def prepare_sync_receive(cls, ctrl_connection: Connection):
         ret = rtlsdr.reset_buffer()
         ctrl_connection.send("RESET_BUFFER:" + str(ret))
         return ret
 
+    _empty_reads = 0
+
     @classmethod
     def receive_sync(cls, data_conn: Connection):
-        data_conn.send_bytes(rtlsdr.read_sync())
+        data = rtlsdr.read_sync()
+        if not data:
+            # read failed (e.g. device unplugged): do not spin at full CPU
+            cls._empty_reads += 1
+            if cls._empty_reads == 50:
+                logger.warning("RTL-SDR does not deliver samples")
+            time.sleep(0.01)
+            return
+        cls._empty_reads = 0
+        data_conn.send_bytes(data)
 
     @classmethod
     def shutdown_device(cls, ctrl_connection, is_tx: bool):
@@ -109,6 +167,8 @@ class RTLSDR(Device):
 
     @staticmethod
     def bytes_to_iq(buffer):
-        return np.subtract(np.frombuffer(buffer, dtype=np.int8), 127).reshape(
-            (-1, 2), order="C"
-        )
+        # RTL-SDR samples are unsigned bytes centred at 127.5. Reading them as
+        # int8 and subtracting 127 wrapped around: a full scale sample (255)
+        # became -128 instead of +128, so strong (clipping) signals got spikes.
+        samples = np.frombuffer(buffer, dtype=np.uint8).astype(np.int16) - 127
+        return np.clip(samples, -128, 127).astype(np.int8).reshape((-1, 2), order="C")

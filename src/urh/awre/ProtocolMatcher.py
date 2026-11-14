@@ -42,6 +42,7 @@ class ProtocolMatch:
         self.details = details  # explanation of scoring
         self.recommended_decoder = recommended_decoder
         self.leading_zeros_count = leading_zeros_count
+        self.category = protocol_category(protocol_entry)
 
     @property
     def percentage(self) -> int:
@@ -130,8 +131,22 @@ class ProtocolMatcher:
         ],
     }
 
-    def __init__(self, messages: List[Message], available_decodings: list = None):
+    def __init__(
+        self,
+        messages: List[Message],
+        available_decodings: list = None,
+        sample_rate: float = None,
+        prefer_remotes: bool = True,
+    ):
+        """
+        :param sample_rate: sample rate of the signal, used to compare the
+                            measured pulse widths with the database
+        :param prefer_remotes: rank remote controls (gates, garages, car
+                               keys) above sensors such as weather stations
+        """
         self.messages = messages
+        self.sample_rate = sample_rate
+        self.prefer_remotes = prefer_remotes
         self.available_decodings = list(available_decodings or [])
         self._ensure_essential_decodings()
 
@@ -203,9 +218,15 @@ class ProtocolMatcher:
         if not self.messages:
             return []
 
-        features = self._extract_message_features()
+        # Use the data frames only: remotes often send the preamble as a
+        # separate message, and short noise fragments distort every length
+        # and encoding estimate (the first message decided the encoding).
+        frames = self._select_frames(self.messages)
+        features = self._extract_message_features(frames)
         if not features:
             return []
+        timing = self._measure_timing(frames)
+        features["timing"] = timing
 
         # Split messages that contain repeated packets.
         # Strip trailing zeros so they don't inflate scoring.
@@ -253,8 +274,14 @@ class ProtocolMatcher:
         fa_encoding = "nrz"
         fa_decoded_len = 0
         if frame_analyses:
-            fa_encoding = frame_analyses[0][1].get("data_encoding", "nrz")
-            fa_decoded_len = frame_analyses[0][1].get("data_bits_decoded", 0)
+            encodings = [fa[1].get("data_encoding", "nrz") for fa in frame_analyses]
+            fa_encoding = max(set(encodings), key=encodings.count)
+            lens = [
+                fa[1].get("data_bits_decoded", 0)
+                for fa in frame_analyses
+                if fa[1].get("data_encoding", "nrz") == fa_encoding
+            ]
+            fa_decoded_len = int(np.median(lens)) if lens else 0
 
         # Store FrameAnalyzer results in features for base scoring
         features["fa_encoding"] = fa_encoding
@@ -383,6 +410,9 @@ class ProtocolMatcher:
                         len_match = 1.0 - len_diff / tolerance
                         error_penalty = min(avg_errors / 50.0, 0.3)
                         bonus = 0.4 * len_match * (1.0 - error_penalty)
+                        if len_diff == 0 and avg_errors == 0:
+                            # exactly the expected number of data bits
+                            bonus += 0.05
 
                         # Padding bonus: if decoded bits after the
                         # expected data are all zeros (padding/silence),
@@ -472,6 +502,21 @@ class ProtocolMatcher:
                     details["cipher_support"] = self.PROTOCOL_CIPHERS[ckey]
                     break
 
+            # ── Pulse timing ───────────────────────────────────
+            # Weather stations and remotes often have similar lengths and
+            # encodings; the pulse widths tell them apart.
+            timing_score = self._timing_score(proto, timing)
+            if timing_score is not None:
+                final_score *= 0.55 + 0.45 * timing_score
+                details["timing"] = f"{int(timing_score * 100)}% ({timing['text']})"
+
+            # ── Device category ────────────────────────────────
+            category = protocol_category(proto)
+            details["category"] = category
+            if self.prefer_remotes:
+                final_score += self.CATEGORY_PRIOR.get(category, 0.0)
+                final_score = min(max(final_score, 0.0), 1.0)
+
             if final_score >= self.MIN_SCORE_THRESHOLD:
                 if best_decoder is None:
                     best_decoder = self._find_best_decoder(proto, features)
@@ -506,6 +551,131 @@ class ProtocolMatcher:
 
         scored.sort(key=_sort_key, reverse=True)
         return scored[:max_results]
+
+    # Score added per device category when remotes are preferred
+    CATEGORY_PRIOR = {
+        "remote": 0.10,
+        "car key": 0.05,
+        "security": 0.0,
+        "other": 0.0,
+        "sensor": -0.08,
+        "meter": -0.08,
+        "tpms": -0.08,
+    }
+
+    @staticmethod
+    def _message_bits(msg) -> str:
+        return msg.decoded_bits_str if msg.decoded_bits_str else msg.plain_bits_str
+
+    @classmethod
+    def _select_frames(cls, messages):
+        """
+        Pick the messages that carry the data: skip noise fragments and
+        preamble-only messages, then keep the most common length group.
+        """
+        items = []
+        for msg in messages:
+            bits = cls._message_bits(msg)
+            core = bits.strip("0")
+            if len(core) < 12 or _is_preamble_only(core):
+                continue
+            items.append((msg, len(core)))
+        if not items:
+            return list(messages)
+
+        # group lengths within 10 %
+        groups = []
+        for msg, n in sorted(items, key=lambda x: x[1]):
+            if groups and n <= groups[-1][0] * 1.1 + 2:
+                groups[-1][1].append(msg)
+            else:
+                groups.append([n, [msg]])
+        best = max(groups, key=lambda g: (len(g[1]), g[0]))
+        chosen = set(id(m) for m in best[1])
+        return [m for m in messages if id(m) in chosen]
+
+    def _measure_timing(self, frames) -> dict:
+        """Pulse (high) and gap (low) widths of the frames in microseconds."""
+        result = {"text": "no timing"}
+        if not self.sample_rate or not frames:
+            return result
+        sps = [getattr(m, "samples_per_symbol", 0) or 0 for m in frames]
+        sps = [x for x in sps if x > 0]
+        if not sps:
+            return result
+        symbol_us = float(np.median(sps)) / float(self.sample_rate) * 1e6
+
+        highs, lows = [], []
+        for msg in frames[:20]:
+            core = msg.plain_bits_str.strip("0")
+            for run in re.finditer(r"1+|0+", core):
+                n = run.end() - run.start()
+                (highs if run.group()[0] == "1" else lows).append(n)
+
+        def short_long(runs):
+            if not runs:
+                return None, None
+            runs = sorted(runs)
+            shortest = runs[0]
+            short = [r for r in runs if r <= shortest * 1.5]
+            long = [r for r in runs if r > shortest * 1.5]
+            s = float(np.median(short)) * symbol_us
+            # ignore rare long runs (sync, gaps between packets)
+            if len(long) < max(2, len(runs) // 10):
+                return s, None
+            return s, float(np.median(long)) * symbol_us
+
+        result["symbol_us"] = symbol_us
+        result["pulse"] = short_long(highs)
+        result["gap"] = short_long(lows)
+        p = result["pulse"]
+        result["text"] = "symbol={0:.0f}us pulse={1}/{2}us".format(
+            symbol_us,
+            "%.0f" % p[0] if p[0] else "?",
+            "%.0f" % p[1] if p[1] else "-",
+        )
+        return result
+
+    @staticmethod
+    def _closeness(measured, expected, tolerance) -> float:
+        """1 when equal, 0 when off by the tolerance factor or more."""
+        if not measured or not expected or measured <= 0 or expected <= 0:
+            return None
+        return max(0.0, 1.0 - abs(np.log(measured / expected)) / np.log(tolerance))
+
+    def _timing_score(self, proto: dict, timing: dict):
+        """
+        Compare measured pulse widths with the protocol. Remote encoders run
+        at many clock speeds (KeeLoq TE 100-900 us), so for them the ratio
+        long/short counts most and the absolute width is lenient.
+        """
+        if not timing or "symbol_us" not in timing:
+            return None
+        short_w = proto.get("short_width", 0) or 0
+        long_w = proto.get("long_width", 0) or 0
+        if short_w <= 0:
+            return None
+        mod = proto.get("modulation", "").upper()
+        lenient = protocol_category(proto) in ("remote", "car key", "security")
+        abs_tol = 3.0 if lenient else 1.6
+
+        if "PWM" in mod or "PIWM" in mod or "PPM" in mod:
+            # PWM: pulse widths differ; PPM: gaps differ
+            short_m, long_m = timing["gap"] if "PPM" in mod else timing["pulse"]
+            if short_m is None:
+                return None
+            abs_score = self._closeness(short_m, short_w, abs_tol)
+            if long_w > 0 and long_m:
+                ratio_score = self._closeness(long_m / short_m, long_w / short_w, 1.8)
+                return 0.6 * ratio_score + 0.4 * abs_score
+            if long_w > 0 and long_w >= 1.5 * short_w and long_m is None:
+                # the protocol has two widths, the signal only one
+                return 0.3 * abs_score
+            return abs_score
+
+        # PCM / NRZ / RZ / Manchester: one URH symbol is one bit (half a
+        # Manchester bit), compare it with the protocol's short width
+        return self._closeness(timing["symbol_us"], short_w, abs_tol)
 
     def find_best_decoder(self) -> Tuple[Optional[Encoding], float, str]:
         """
@@ -559,13 +729,14 @@ class ProtocolMatcher:
 
     # ── Feature extraction ────────────────────────────────
 
-    def _extract_message_features(self) -> dict:
+    def _extract_message_features(self, messages=None) -> dict:
         """Extract features from messages for matching."""
-        if not self.messages:
+        messages = self.messages if messages is None else messages
+        if not messages:
             return {}
 
         bit_strings_raw = []
-        for msg in self.messages:
+        for msg in messages:
             bits = msg.decoded_bits_str if msg.decoded_bits_str else msg.plain_bits_str
             bit_strings_raw.append(bits)
 
@@ -594,7 +765,7 @@ class ProtocolMatcher:
             "median_length": int(np.median(bit_lengths)),
             "min_length": min(bit_lengths),
             "max_length": max(bit_lengths),
-            "num_messages": len(self.messages),
+            "num_messages": len(messages),
             "preamble_bits": preamble,
             "preamble_hex": preamble_hex,
             "sync_bits": sync_word,
@@ -916,13 +1087,11 @@ class ProtocolMatcher:
             details["fields"] = f"{len(fields)} fields"
             weights_used += weight
 
-        # 5. Checksum (weight: 0.1)
-        weight = 0.1
+        # 5. Checksum: only informative. It used to add points just for
+        # having a checksum, which favoured weather sensors over remotes.
         checksum = proto.get("checksum", "")
         if checksum:
-            score += weight * 0.5
             details["checksum"] = checksum
-            weights_used += weight
 
         if weights_used > 0 and weights_used < 1.0:
             score = score / weights_used * 0.8
@@ -1635,6 +1804,81 @@ def _auto_display_format(field_bits: int, field_name: str = "") -> int:
 
     # Everything else (id, encrypted, code, checksum, data) → Hex
     return 1  # Hex
+
+
+_SENSOR_WORDS = (
+    "temperature",
+    "humidity",
+    "rain",
+    "wind",
+    "moisture",
+    "pressure_hpa",
+    "uv",
+    "lux",
+    "light_lux",
+    "depth",
+    "soil",
+    "weather",
+    "thermo",
+    "hygro",
+    "lightning",
+    "pool",
+)
+_METER_WORDS = ("power_w", "energy", "consumption", "meter", "current_a", "voltage")
+_REMOTE_NAME = re.compile(
+    r"remote|key ?fob|keyfob|gate|garage|door opener|keeloq|rolling|came|nice|"
+    r"somfy|faac|bft|hormann|chamberlain|liftmaster|megacode|"
+    r"ev1527|pt22|sc226|ht6p|ht680|princeton|switch transmitter|wireless switch|"
+    r"curtain|shutter|blind|fan control|ceiling fan|doorbell|button|"
+    r"intertechno|nexa|blyss|brennenstuhl|x10 rf|fs20|quhwa|funkbus",
+    re.I,
+)
+_CAR_NAME = re.compile(
+    r"car key|car alarm|keyless|\bvag\b|honda|\bkia\b|subaru|mazda|mitsubishi|"
+    r"\bfiat\b|\bpsa\b|porsche|suzuki|star ?line|scher-khan",
+    re.I,
+)
+_SECURITY_NAME = re.compile(
+    r"security|alarm|smoke|pir|motion|contact|door/window|leak|intrusion", re.I
+)
+
+
+def protocol_category(entry: dict) -> str:
+    """
+    Rough device class of a database entry: remote, car key, security,
+    sensor (weather/temperature...), meter, tpms or other.
+    """
+    name = entry.get("name", "")
+    fields = " ".join(entry.get("fields", [])).lower()
+    lname = name.lower()
+    if "tpms" in lname or "pressure_kpa" in fields or "pressure_psi" in fields:
+        return "tpms"
+    if any(w in fields for w in _SENSOR_WORDS) or any(
+        w in lname for w in ("weather", "thermometer", "temperature", "rain gauge")
+    ):
+        return "sensor"
+    if any(w in fields for w in _METER_WORDS) or "meter" in lname:
+        return "meter"
+    if _CAR_NAME.search(name):
+        return "car key"
+    # keyfobs and remotes of garage openers (Security+) are remotes
+    if re.search(r"keyfob|key fob|remote|liftmaster|curtain", name, re.I):
+        return "remote"
+    if _SECURITY_NAME.search(name):
+        return "security"
+    if _REMOTE_NAME.search(name) or any(
+        w in fields for w in ("button", "cmd", "rolling", "encrypted", "dipswitch")
+    ):
+        return "remote"
+    return "other"
+
+
+def _is_preamble_only(bits: str) -> bool:
+    """Message that is only a 1010... preamble (sent separately by remotes)."""
+    if len(bits) < 4:
+        return False
+    changes = sum(1 for i in range(1, len(bits)) if bits[i] != bits[i - 1])
+    return changes >= 0.95 * (len(bits) - 1)
 
 
 def _is_alternating(bits: str) -> bool:

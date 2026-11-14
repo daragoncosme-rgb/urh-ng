@@ -204,6 +204,7 @@ class SendRecvDialog(QDialog):
         self.ui.btnSave.setEnabled(self.device.current_index > 0)
         self.device_settings_widget.ui.comboBoxDeviceIdentifier.setEnabled(True)
         self.device_settings_widget.ui.btnRefreshDeviceIdentifier.setEnabled(True)
+        self.device_settings_widget.ui.cbDevice.setEnabled(True)
         self.device_settings_widget.set_bandwidth_status()
 
         self.timer.stop()
@@ -219,6 +220,10 @@ class SendRecvDialog(QDialog):
         self.ui.btnStop.setEnabled(True)
         self.device_settings_widget.ui.comboBoxDeviceIdentifier.setEnabled(False)
         self.device_settings_widget.ui.btnRefreshDeviceIdentifier.setEnabled(False)
+        # Changing the device while receiving created a new device without
+        # stopping the running one (Spectrum Analyzer keeps its settings
+        # editable while running): the old receiver kept the SDR open.
+        self.device_settings_widget.ui.cbDevice.setEnabled(False)
 
         self.timer.start(self.update_interval)
 

@@ -827,16 +827,27 @@ class ProtocolAnalyzer(object):
                     message.message_type = message_type
                     break
 
-    def auto_assign_labels(self):
+    def auto_assign_labels(self, max_messages: int = None):
+        """
+        Find labels and message types with the format finder (AWRE).
+
+        :param max_messages: only analyze the first messages. The analysis
+                             compares every pair of messages, so thousands of
+                             (often noise) messages take a very long time.
+        """
         from urh.awre.FormatFinder import FormatFinder
 
-        format_finder = FormatFinder(self.messages)
+        messages = self.messages
+        if max_messages is not None and len(messages) > max_messages:
+            messages = messages[:max_messages]
+
+        format_finder = FormatFinder(messages)
         format_finder.run(max_iterations=10)
 
         self.message_types[:] = format_finder.message_types
         for msg_type, indices in format_finder.existing_message_types.items():
             for i in indices:
-                self.messages[i].message_type = msg_type
+                messages[i].message_type = msg_type
 
     @staticmethod
     def get_protocol_from_string(

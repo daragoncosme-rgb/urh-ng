@@ -102,6 +102,8 @@ DEVICE_CONFIG["RTL-SDR"] = {
     "sample_rate": dev_range(start=1, stop=int(3.2 * M), step=1),
     "bandwidth": dev_range(start=1, stop=int(3.2 * M), step=1),
     "rx_rf_gain": list(range(-100, 500)),
+    # tenths of a dB: 29.7 dB instead of 4.9 dB (25th percentile of the range)
+    "default_rx_rf_gain": 297,
     "direct_sampling": ["disabled", "I-ADC input enabled", "Q-ADC input enabled"],
     "freq_correction": dev_range(start=-1 * 10**3, stop=1 * 10**3, step=1),
     "bias_tee_enabled": [False, True],

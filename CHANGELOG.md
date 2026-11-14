@@ -5,6 +5,30 @@ All notable changes to URH-NG are documented here.
 ## [Unreleased]
 
 ### Added
+- **Spectrum Analyzer view selector and radio presets.** A dropdown now lets
+  you switch the Spectrum Analyzer between "Classic URH" and an "Averaged
+  (dB)" view with configurable FFT size, window and averaging, plus waterfall
+  sensitivity/contrast controls, so weak signals (e.g. garage/door remotes)
+  are easier to see. A preset selector next to the device settings fills in
+  frequency, sample rate and bandwidth for common remote-control bands, so you
+  no longer have to look up the frequency yourself.
+- **Copy a message's "encrypted" field into the Crypto Toolkit.** With the
+  Crypto Toolkit (KeeLoq/TEA/AES) open, clicking a message row in the
+  Analysis table now copies that message's `encrypted` label into
+  "Encrypted #2", so a second capture for KeeLoq key bruteforcing is set just
+  by selecting a row.
+- **Category filter and better scoring in Auto-identify protocol (PHZ DB).**
+  Matches are now classified (remote control, car key, security, sensor,
+  meter, TPMS) and a filter dropdown defaults to "Remote controls (gates,
+  garages, car keys)", so weather-station and other sensor protocols no
+  longer crowd out garage/door remotes. Scoring now also compares measured
+  pulse/gap timing against each candidate protocol, and the free bonus for
+  merely having a checksum field (which favored sensors) was removed.
+- **Autodetect noise and modulation enabled by default** in Interpretation's
+  Autodetect parameters dropdown. Noise-level and modulation detection were
+  also improved for weak signals: magnitudes are smoothed before segmenting a
+  weak signal, pulse trains (many short segments merging into few messages)
+  are recognized as OOK instead of being misclassified as FSK per-segment.
 - **Remember the last used SDR.** Every device settings panel (Record, Send,
   Spectrum, Sniff and Simulator) opens with the last selected device, also
   after restarting URH-NG; previously the project default (USRP) was shown
@@ -71,6 +95,30 @@ All notable changes to URH-NG are documented here.
   than 255 bytes, an out-of-bounds read in the LFSR, a buffer overflow with
   inputs over 8192 bits, writes to `dec[-1]`/`enc[-1]` with inputs shorter than
   16 bits, and a missing NUL terminator at the maximum input size.
+- **Analyze Protocol froze permanently around 70%** on signals with many
+  messages: an integer overflow in a `uint32` sample-index array (AWRE
+  preamble detection) and an O(n²) range-overlap check made the analysis
+  effectively never finish. Both are fixed, and a warning dialog now offers
+  to cap the analysis at a configurable number of messages (1500 by default)
+  on very large captures.
+- **Only the Spectrum Analyzer showed a signal; Record, Sniff and other
+  spectrum views showed only noise with RTL-SDR.** The device silently
+  rejected its first tune command (error -9) and never retried, and changing
+  direct-sampling mode re-initialized the tuner without restoring the
+  frequency. RTL-SDR now verifies the tuned frequency and retunes on
+  mismatch or after a direct-sampling-mode change. Also fixed: the RTL-SDR
+  gain was effectively in tenths of dB while shown and defaulted as whole dB
+  (the UI now labels and defaults it correctly), an int8/uint8 sample
+  conversion wraparound, and a circular-buffer wraparound in the protocol
+  sniffer that could read stale data.
+- **Spanish (and other comma-decimal) locales could not enter frequencies and
+  other parameters** in the numeric spin boxes; they now parse `,` as the
+  decimal separator.
+- **Switching device while a receive was running** could crash the Record/
+  Sniff/Spectrum dialogs; the device selector is now disabled while
+  receiving.
+- A `NaN`-to-int cast in the waterfall color mapping could raise under some
+  signals; it's now clamped with `np.nan_to_num`.
 
 ## [0.0.2] - 2026-07-10
 

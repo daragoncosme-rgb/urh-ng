@@ -52,7 +52,12 @@ class FormatFinder(object):
             self.preamble_lengths,
             sync_len,
         ) = preprocessor.preprocess()
-        self.sync_ends = self.preamble_starts + self.preamble_lengths + sync_len
+        # The preprocessor returns unsigned 32 bit arrays. Subtractions below
+        # wrapped around to ~4e9 for noisy messages, which created label
+        # ranges of billions of bits and froze "Analyze Protocol".
+        self.preamble_starts = np.asarray(self.preamble_starts, dtype=np.int64)
+        self.preamble_lengths = np.asarray(self.preamble_lengths, dtype=np.int64)
+        self.sync_ends = self.preamble_starts + self.preamble_lengths + int(sync_len)
 
         n = shortest_field_length
         if n is None:
@@ -292,10 +297,8 @@ class FormatFinder(object):
 
         for rng in common_ranges.copy():
             for lbl in message_type:  # type: ProtocolLabel
-                if any(
-                    i in range(rng.bit_start, rng.bit_end)
-                    for i in range(lbl.start, lbl.end)
-                ):
+                # same as checking every bit of the label, but O(1)
+                if max(rng.bit_start, lbl.start) < min(rng.bit_end, lbl.end):
                     common_ranges.discard(rng)
                     break
 

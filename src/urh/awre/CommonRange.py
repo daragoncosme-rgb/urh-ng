@@ -153,10 +153,10 @@ class CommonRange(object):
     def overlaps_with(self, other) -> bool:
         if not isinstance(other, CommonRange):
             raise ValueError("Need another bit range to compare")
-        return any(
-            i in range(self.bit_start, self.bit_end)
-            for i in range(other.bit_start, other.bit_end)
-        )
+        # Two bit ranges overlap if they share at least one bit. Checking the
+        # interval bounds is the same as testing every bit, but O(1): this ran
+        # millions of times on long recordings and froze "Analyze Protocol".
+        return max(self.bit_start, other.bit_start) < min(self.bit_end, other.bit_end)
 
     def ensure_not_overlaps(self, start: int, end: int):
         """

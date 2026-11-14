@@ -203,6 +203,11 @@ class Spectrogram(object):
         else:
             normalized_values = data.T
 
+        # Silent parts give -inf dB (log of 0): show them with the lowest colour
+        # instead of casting NaN/inf to int (undefined values, RuntimeWarning)
+        normalized_values = np.nan_to_num(
+            normalized_values, nan=0.0, posinf=len(colormap) - 1, neginf=0.0
+        )
         return np.take(colormap, normalized_values.astype(int), axis=0, mode="clip")
 
     @staticmethod

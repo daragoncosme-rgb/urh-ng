@@ -59,15 +59,42 @@ class KillerDoubleSpinBox(QDoubleSpinBox):
 
         return result + suffix
 
+    @staticmethod
+    def parse_number(text: str) -> float:
+        """
+        Parse a number typed with either "." or "," as decimal separator,
+        independent of the system language: with a Spanish or German locale
+        "433.92" was not understood and the value silently became the minimum.
+        """
+        t = text.strip().replace(" ", "")
+        if "," in t and "." in t:
+            # The last separator is the decimal one, the other groups digits
+            decimal = "," if t.rfind(",") > t.rfind(".") else "."
+            group = "." if decimal == "," else ","
+            t = t.replace(group, "").replace(decimal, ".")
+        elif t.count(",") == 1:
+            t = t.replace(",", ".")
+        elif t.count(",") > 1 or t.count(".") > 1:
+            t = t.replace(",", "").replace(".", "")
+        return float(t)
+
     def valueFromText(self, text: str):
-        if text.endswith("G") or text.endswith("g"):
-            return QLocale().toDouble(text[:-1])[0] * 10**9
-        elif text.endswith("M") or text.endswith("m"):
-            return QLocale().toDouble(text[:-1])[0] * 10**6
-        elif text.endswith("K") or text.endswith("k"):
-            return QLocale().toDouble(text[:-1])[0] * 10**3
-        else:
-            return QLocale().toDouble(text.rstrip(self.suffix()))[0]
+        text = text.strip()
+        suffix = self.suffix()
+        if suffix and text.endswith(suffix):
+            text = text[: -len(suffix)]
+        factor = 1
+        if text[-1:] in ("G", "g"):
+            factor, text = 10**9, text[:-1]
+        elif text[-1:] in ("M", "m"):
+            factor, text = 10**6, text[:-1]
+        elif text[-1:] in ("K", "k"):
+            factor, text = 10**3, text[:-1]
+        try:
+            return self.parse_number(text) * factor
+        except ValueError:
+            value, ok = QLocale().toDouble(text)
+            return value * factor if ok else self.value()
 
     def validate(self, inpt: str, pos: int):
         if self.suffix().upper() in ("", "K", "M", "G"):

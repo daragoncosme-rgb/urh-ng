@@ -145,12 +145,26 @@ class SignalFrame(QFrame):
                     self.tr("Additionally detect noise")
                 )
                 self.detect_noise_action.setCheckable(True)
-                self.detect_noise_action.setChecked(False)
+                self.detect_noise_action.setChecked(
+                    settings.read("SignalFrame/autodetect_noise", True, bool)
+                )
                 self.detect_modulation_action = self.auto_detect_menu.addAction(
                     self.tr("Additionally detect modulation")
                 )
                 self.detect_modulation_action.setCheckable(True)
-                self.detect_modulation_action.setChecked(False)
+                self.detect_modulation_action.setChecked(
+                    settings.read("SignalFrame/autodetect_modulation", True, bool)
+                )
+                self.detect_noise_action.toggled.connect(
+                    lambda checked: settings.write(
+                        "SignalFrame/autodetect_noise", checked
+                    )
+                )
+                self.detect_modulation_action.toggled.connect(
+                    lambda checked: settings.write(
+                        "SignalFrame/autodetect_modulation", checked
+                    )
+                )
                 self.ui.btnAutoDetect.setMenu(self.auto_detect_menu)
 
             if self.signal.wav_mode:

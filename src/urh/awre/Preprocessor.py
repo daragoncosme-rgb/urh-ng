@@ -84,12 +84,15 @@ class Preprocessor(object):
         for i, bitvector in enumerate(self.bitvectors):
             preamble_lengths = []
             bits = bitvector.tobytes()
+            # Python int: with the uint32 array value a sync word found before
+            # the preamble wrapped around to a preamble of ~4e9 bits
+            preamble_start = int(preamble_starts[i])
 
             for sync_word in byte_sync_words:
                 sync_start = bits.find(sync_word)
                 if sync_start != -1:
-                    if sync_start - preamble_starts[i] >= 2:
-                        preamble_lengths.append(sync_start - preamble_starts[i])
+                    if sync_start - preamble_start >= 2:
+                        preamble_lengths.append(sync_start - preamble_start)
 
                     # Consider case where sync word starts with preamble pattern
                     sync_start = bits.find(
@@ -97,8 +100,8 @@ class Preprocessor(object):
                     )
 
                     if sync_start != -1:
-                        if sync_start - preamble_starts[i] >= 2:
-                            preamble_lengths.append(sync_start - preamble_starts[i])
+                        if sync_start - preamble_start >= 2:
+                            preamble_lengths.append(sync_start - preamble_start)
 
             preamble_lengths.sort()
 

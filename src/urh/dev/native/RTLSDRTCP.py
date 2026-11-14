@@ -62,6 +62,9 @@ class RTLSDRTCP(Device):
             sdr.set_parameter(
                 "directSampling", int(direct_sampling_mode), ctrl_connection
             )
+            # Changing the direct sampling mode re-initializes the tuner and
+            # loses the frequency: tune again afterwards
+            sdr.set_parameter("centerFreq", int(center_freq), ctrl_connection)
             sdr.set_parameter("biasTee", int(bias_tee_enabled), ctrl_connection)
             # Gain has to be set last, otherwise it does not get considered by RTL-SDR
             sdr.set_parameter("tunerGain", int(gain), ctrl_connection)
@@ -77,15 +80,26 @@ class RTLSDRTCP(Device):
                         break
 
                 if not exit_requested:
-                    data_connection.send_bytes(sdr.read_sync())
+                    try:
+                        data_connection.send_bytes(sdr.read_sync())
+                    except (BrokenPipeError, ConnectionResetError, EOFError, OSError):
+                        # The GUI closed the data pipe: stop and close the socket
+                        exit_requested = True
 
             logger.debug("RTLSDRTCP: closing device")
             sdr.close()
         else:
             ctrl_connection.send("Could not connect to rtl_tcp:404")
-        ctrl_connection.send("close:0")
-        data_connection.close()
-        ctrl_connection.close()
+        for conn in (ctrl_connection, data_connection):
+            try:
+                if conn is ctrl_connection:
+                    conn.send("close:0")
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            try:
+                conn.close()
+            except OSError:
+                pass
 
     def process_command(self, command, ctrl_connection, is_tx=False):
         logger.debug("RTLSDRTCP: {}".format(command))
@@ -272,6 +286,8 @@ class RTLSDRTCP(Device):
 
     @staticmethod
     def bytes_to_iq(buffer):
-        return np.subtract(np.frombuffer(buffer, dtype=np.int8), 127).reshape(
-            (-1, 2), order="C"
-        )
+        # RTL-SDR samples are unsigned bytes centred at 127.5. Reading them as
+        # int8 and subtracting 127 wrapped around: a full scale sample (255)
+        # became -128 instead of +128, so strong (clipping) signals got spikes.
+        samples = np.frombuffer(buffer, dtype=np.uint8).astype(np.int16) - 127
+        return np.clip(samples, -128, 127).astype(np.int8).reshape((-1, 2), order="C")

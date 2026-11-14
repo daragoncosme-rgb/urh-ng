@@ -169,18 +169,17 @@ class ProtocolSniffer(ProtocolAnalyzer, QObject):
         while self.is_running:
             time.sleep(0.01)
             if self.rcv_device.is_raw_mode:
-                if old_index <= self.rcv_device.current_index:
-                    data = self.rcv_device.data[
-                        old_index : self.rcv_device.current_index
-                    ]
+                # Read the write position once: the receive thread moves it
+                current_index = self.rcv_device.current_index
+                if old_index <= current_index:
+                    data = self.rcv_device.data[old_index:current_index]
                 else:
-                    data = np.concatenate(
-                        (
-                            self.rcv_device.data[old_index:],
-                            self.rcv_device.data[: self.rcv_device.current_index],
-                        )
-                    )
-                old_index = self.rcv_device.current_index
+                    # The receive buffer wrapped around. The device restarts at
+                    # 0 when the next chunk does not fit, so everything after
+                    # old_index is from the previous round: demodulating it
+                    # again produced repeated or broken messages.
+                    data = self.rcv_device.data[:current_index]
+                old_index = current_index
                 self.__demodulate_data(data)
             elif self.rcv_device.backend == Backends.network:
                 # We receive the bits here

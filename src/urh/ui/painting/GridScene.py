@@ -16,6 +16,9 @@ class GridScene(ZoomableScene):
         self.frequencies = []
         self.frequency_marker = None
         self.fft_size = 1
+        # dB per scene unit for the level labels of the horizontal grid lines
+        # (None = no labels)
+        self.y_label_db_per_unit = None
         super().__init__(parent)
         self.setSceneRect(0, 0, 10, 10)
 
@@ -84,6 +87,16 @@ class GridScene(ZoomableScene):
                 fw = self.font_metrics.horizontalAdvance(value)
                 painter.drawText(QPointF(x / scale_x - fw / 2, bottom / scale_y), value)
 
+            # Y axis: level labels
+            if self.y_label_db_per_unit:
+                for y in y_values:
+                    if y <= rect.top():
+                        continue
+                    level = "{:.0f} dB".format(-y * self.y_label_db_per_unit)
+                    painter.drawText(
+                        QPointF(rect.left() / scale_x + 3, y / scale_y - 2), level
+                    )
+
     def draw_frequency_marker(self, x_pos, frequency):
         if frequency is None:
             self.clear_frequency_marker()
@@ -114,7 +127,7 @@ class GridScene(ZoomableScene):
         font_metric = QFontMetrics(self.frequency_marker[1].font())
         text_width = font_metric.horizontalAdvance("Tune to") * scale_x
         text_width += (font_metric.horizontalAdvance(" ") * scale_x) / 2
-        self.frequency_marker[1].setPos(x_pos - text_width, 0.95 * y1)
+        self.frequency_marker[1].setPos(x_pos - text_width, y1 + 0.025 * (y2 - y1))
 
     def clear_frequency_marker(self):
         if self.frequency_marker is not None:

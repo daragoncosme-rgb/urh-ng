@@ -164,6 +164,17 @@ class KeeLoqDialog(QDialog):
                 if self._encrypted:
                     self.edit_crypto_data.setText(f"{self._encrypted:08X}")
 
+    def set_encrypted2(self, value: int):
+        """
+        Fill the "Encrypted #2" field (the second capture used for the KeeLoq
+        key bruteforce). Called from the Analysis tab when another message row
+        is selected while this dialog is open.
+        """
+        self.edit_encrypted2.setText("{0:08X}".format(value & 0xFFFFFFFF))
+        # The field lives on the KeeLoq Decoder tab; show it so the change is
+        # visible, without stealing keyboard focus from the protocol table.
+        self._tabs.setCurrentIndex(0)
+
     # ── Decoder Tab ──────────────────────────────────
 
     def _build_decoder_tab(self):

@@ -464,7 +464,12 @@ class MainController(QMainWindow):
             sig_frame.ui.stackedWidget.setCurrentWidget(sig_frame.ui.pageLoading)
             QApplication.processEvents()
             if not signal.already_demodulated:
-                signal.auto_detect(detect_modulation=True, detect_noise=False)
+                signal.auto_detect(
+                    detect_modulation=True,
+                    detect_noise=settings.read(
+                        "SignalFrame/autodetect_noise", True, bool
+                    ),
+                )
             sig_frame.ui.stackedWidget.setCurrentWidget(sig_frame.ui.pageSignal)
 
         signal.blockSignals(False)

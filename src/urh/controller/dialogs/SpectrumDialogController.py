@@ -23,10 +23,16 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QFrame,
     QSpinBox,
+    QComboBox,
+    QCheckBox,
+    QPushButton,
+    QSlider,
 )
 
+from urh import settings
 from urh.controller.dialogs.SendRecvDialog import SendRecvDialog
 from urh.dev.VirtualDevice import VirtualDevice, Mode
+from urh.signalprocessing import SpectrumProcessor as sp
 from urh.signalprocessing.Spectrogram import Spectrogram
 from urh.ui.painting.FFTSceneManager import FFTSceneManager
 
@@ -66,7 +72,11 @@ class SpectrumDialogController(SendRecvDialog):
         self.__clear_spectrogram()
 
         self._mod_counter = 0
+        self.processor = sp.SpectrumProcessor()
+        self._waterfall_range = (-80, 10)
+        self._wf_floor = None
         self.__setup_extras()
+        self.__setup_display_controls()
 
         self.gain_timer = QTimer(self)
         self.gain_timer.setSingleShot(True)
@@ -163,6 +173,302 @@ class SpectrumDialogController(SendRecvDialog):
 
         layout.addWidget(bar)
 
+    # ── Display options ──────────────────────────────────────
+
+    VIEW_AVERAGED = "Averaged (dB)"
+    VIEW_CLASSIC = "Classic URH"
+    SETTINGS_PREFIX = "SpectrumAnalyzer/"
+
+    def __setting(self, key, default, type_):
+        return settings.read(self.SETTINGS_PREFIX + key, default, type_)
+
+    def __setup_display_controls(self):
+        layout = self.ui.page_spectrum.layout()
+        rows = QWidget()
+        v = QVBoxLayout(rows)
+        v.setContentsMargins(2, 0, 2, 0)
+        v.setSpacing(2)
+        h = QHBoxLayout()
+        h.setSpacing(4)
+        v.addLayout(h)
+
+        def combo(items, current, tooltip):
+            cb = QComboBox()
+            cb.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+            cb.addItems([str(i) for i in items])
+            idx = cb.findText(str(current))
+            cb.setCurrentIndex(idx if idx >= 0 else 0)
+            cb.setToolTip(tooltip)
+            return cb
+
+        h.addWidget(QLabel(self.tr("View:")))
+        self.cb_view = combo(
+            [self.VIEW_AVERAGED, self.VIEW_CLASSIC],
+            self.__setting("view", self.VIEW_AVERAGED, str),
+            self.tr(
+                "Averaged (dB): windowed FFT averaged over the buffer and over "
+                "time, in dB with a range that follows the noise floor, like "
+                "common SDR programs. Weak signals stand out of the noise.\n"
+                "Classic URH: one FFT of the whole buffer, as in the original URH."
+            ),
+        )
+        h.addWidget(self.cb_view)
+
+        self.lbl_fft = QLabel(self.tr("FFT:"))
+        h.addWidget(self.lbl_fft)
+        self.cb_fft_size = combo(
+            sp.FFT_SIZES,
+            self.__setting("fft_size", 4096, int),
+            self.tr(
+                "FFT size: more points = finer frequency resolution "
+                "(sample rate / FFT size) but less averaging."
+            ),
+        )
+        h.addWidget(self.cb_fft_size)
+
+        self.lbl_window = QLabel(self.tr("Window:"))
+        h.addWidget(self.lbl_window)
+        self.cb_window = combo(
+            list(sp.WINDOWS.keys()),
+            self.__setting("window", "Hann", str),
+            self.tr(
+                "Window function. Hann is a good default; Blackman-Harris keeps "
+                "strong signals from spreading; Flat top measures levels best."
+            ),
+        )
+        h.addWidget(self.cb_window)
+
+        self.lbl_avg = QLabel(self.tr("Averaging:"))
+        h.addWidget(self.lbl_avg)
+        self.cb_averaging = combo(
+            list(sp.AVERAGING.keys()),
+            self.__setting("averaging", "Medium", str),
+            self.tr(
+                "Average over time. More averaging = smoother noise and weak "
+                "signals easier to see, but short bursts look weaker "
+                "(use Peak hold for remotes)."
+            ),
+        )
+        h.addWidget(self.cb_averaging)
+
+        self.chk_remove_dc = QCheckBox(self.tr("Remove DC"))
+        self.chk_remove_dc.setToolTip(
+            self.tr(
+                "Remove the spike in the middle of the spectrum (DC offset of "
+                "RTL-SDR and other receivers)."
+            )
+        )
+        self.chk_remove_dc.setChecked(self.__setting("remove_dc", True, bool))
+        h.addWidget(self.chk_remove_dc)
+        h.addStretch()
+
+        # Second row: levels
+        h = QHBoxLayout()
+        h.setSpacing(4)
+        v.addLayout(h)
+
+        self.chk_peak_hold = QCheckBox(self.tr("Peak hold"))
+        self.chk_peak_hold.setToolTip(
+            self.tr(
+                "Keep the maximum of every frequency. Press the remote a few "
+                "times and its frequency stays marked."
+            )
+        )
+        self.chk_peak_hold.setChecked(self.__setting("peak_hold", True, bool))
+        h.addWidget(self.chk_peak_hold)
+
+        self.btn_clear_peak = QPushButton(self.tr("Clear peak"))
+        self.btn_clear_peak.setToolTip(self.tr("Clear the peak hold line."))
+        h.addWidget(self.btn_clear_peak)
+
+        self.chk_auto_range = QCheckBox(self.tr("Auto range"))
+        self.chk_auto_range.setToolTip(
+            self.tr(
+                "Adjust the level range to the noise floor and the strongest "
+                "signal. Uncheck to set Min/Max yourself."
+            )
+        )
+        self.chk_auto_range.setChecked(self.__setting("auto_range", True, bool))
+        h.addWidget(self.chk_auto_range)
+
+        self.spin_range_min = QSpinBox()
+        self.spin_range_min.setRange(-200, 40)
+        self.spin_range_min.setSuffix(" dB")
+        self.spin_range_min.setPrefix(self.tr("Min "))
+        self.spin_range_min.setValue(self.__setting("range_min", -110, int))
+        h.addWidget(self.spin_range_min)
+        self.spin_range_max = QSpinBox()
+        self.spin_range_max.setRange(-190, 50)
+        self.spin_range_max.setSuffix(" dB")
+        self.spin_range_max.setPrefix(self.tr("Max "))
+        self.spin_range_max.setValue(self.__setting("range_max", -20, int))
+        h.addWidget(self.spin_range_max)
+
+        h.addStretch()
+
+        # Third row: waterfall colours
+        h = QHBoxLayout()
+        h.setSpacing(4)
+        v.addLayout(h)
+        h.addWidget(QLabel(self.tr("Waterfall sensitivity:")))
+        self.slider_wf_sensitivity = QSlider(Qt.Orientation.Horizontal)
+        self.slider_wf_sensitivity.setRange(0, 40)
+        self.slider_wf_sensitivity.setFixedWidth(160)
+        self.slider_wf_sensitivity.setValue(self.__setting("wf_sensitivity", 10, int))
+        self.slider_wf_sensitivity.setToolTip(
+            self.tr(
+                "Higher = weaker signals become visible in the waterfall "
+                "(the noise gets brighter too). The colours follow the noise "
+                "floor automatically."
+            )
+        )
+        h.addWidget(self.slider_wf_sensitivity)
+        h.addWidget(QLabel(self.tr("Contrast:")))
+        self.slider_wf_contrast = QSlider(Qt.Orientation.Horizontal)
+        self.slider_wf_contrast.setRange(0, 100)
+        self.slider_wf_contrast.setFixedWidth(160)
+        self.slider_wf_contrast.setValue(self.__setting("wf_contrast", 50, int))
+        self.slider_wf_contrast.setToolTip(
+            self.tr(
+                "Higher = stronger colours: weak signals look brighter, "
+                "strong signals saturate sooner."
+            )
+        )
+        h.addWidget(self.slider_wf_contrast)
+        self.lbl_wf_levels = QLabel()
+        self.lbl_wf_levels.setMinimumWidth(110)
+        h.addWidget(self.lbl_wf_levels)
+
+        h.addStretch()
+        layout.insertWidget(0, rows)
+
+        for cb in (self.cb_view, self.cb_fft_size, self.cb_window, self.cb_averaging):
+            cb.currentIndexChanged.connect(self.on_display_option_changed)
+        for chk in (self.chk_remove_dc, self.chk_peak_hold, self.chk_auto_range):
+            chk.toggled.connect(self.on_display_option_changed)
+        self.spin_range_min.valueChanged.connect(self.on_display_option_changed)
+        self.spin_range_max.valueChanged.connect(self.on_display_option_changed)
+        self.slider_wf_sensitivity.valueChanged.connect(self.on_display_option_changed)
+        self.slider_wf_contrast.valueChanged.connect(self.on_display_option_changed)
+        self.btn_clear_peak.clicked.connect(self.on_btn_clear_peak_clicked)
+        self.on_display_option_changed()
+
+    @property
+    def averaged_view(self) -> bool:
+        return self.cb_view.currentText() == self.VIEW_AVERAGED
+
+    @pyqtSlot()
+    def on_display_option_changed(self):
+        averaged = self.averaged_view
+        for w in (
+            self.lbl_fft,
+            self.cb_fft_size,
+            self.lbl_window,
+            self.cb_window,
+            self.lbl_avg,
+            self.cb_averaging,
+            self.chk_remove_dc,
+            self.chk_auto_range,
+            self.spin_range_min,
+            self.spin_range_max,
+        ):
+            w.setVisible(averaged)
+        manual = not self.chk_auto_range.isChecked()
+        self.spin_range_min.setEnabled(manual)
+        self.spin_range_max.setEnabled(manual)
+
+        old_size = self.processor.fft_size
+        self.processor.fft_size = int(self.cb_fft_size.currentText())
+        self.processor.window = self.cb_window.currentText()
+        self.processor.averaging = self.cb_averaging.currentText()
+        self.processor.remove_dc = self.chk_remove_dc.isChecked()
+        self.scene_manager.peak_hold = self.chk_peak_hold.isChecked()
+
+        scene = self.scene_manager.scene
+        view_changed = getattr(self, "_last_view", None) != averaged
+        if view_changed or old_size != self.processor.fft_size:
+            self.processor.reset()
+            self.scene_manager.clear_path()
+            self.scene_manager.clear_peak()
+        self._last_view = averaged
+        if averaged:
+            scene.y_label_db_per_unit = 10
+        else:
+            scene.y_label_db_per_unit = None
+            self.scene_manager.y_range = None
+
+        for key, value in (
+            ("view", self.cb_view.currentText()),
+            ("fft_size", self.processor.fft_size),
+            ("window", self.processor.window),
+            ("averaging", self.processor.averaging),
+            ("remove_dc", self.processor.remove_dc),
+            ("peak_hold", self.chk_peak_hold.isChecked()),
+            ("auto_range", self.chk_auto_range.isChecked()),
+            ("range_min", self.spin_range_min.value()),
+            ("range_max", self.spin_range_max.value()),
+            ("wf_sensitivity", self.slider_wf_sensitivity.value()),
+            ("wf_contrast", self.slider_wf_contrast.value()),
+        ):
+            settings.write(self.SETTINGS_PREFIX + key, value)
+
+    @pyqtSlot()
+    def on_btn_clear_peak_clicked(self):
+        self.scene_manager.clear_peak()
+
+    def __receive_samples(self) -> np.ndarray:
+        """All samples of the circular receive buffer, oldest first."""
+        d = self.device.data
+        if d is None or len(d) == 0:
+            return None
+        try:
+            ci = int(self.device.current_index)
+        except Exception:
+            ci = 0
+        iq = d.as_complex64() if hasattr(d, "as_complex64") else np.asarray(d)
+        if ci >= 2 * self.processor.fft_size:
+            # Enough new samples at the start of the buffer: use only those,
+            # the rest is from the previous round
+            return iq[:ci]
+        return sp.chronological(iq, ci)
+
+    def __compute_spectrum(self):
+        """
+        :return: (frequencies, plot data for the scene manager, magnitude)
+        """
+        if not self.averaged_view:
+            x, y = self.device.spectrum
+            return x, y, y
+
+        samples = self.__receive_samples()
+        if samples is None:
+            return None, None, None
+        x, power = self.processor.compute(samples, self.device.sample_rate)
+        if x is None:
+            return None, None, None
+        power_db = 10 * np.log10(power)
+
+        if self.chk_auto_range.isChecked():
+            peak = self.scene_manager.peak
+            peak_db = None
+            if self.scene_manager.peak_hold and len(peak) == len(power):
+                peak_db = 10 * np.log10(np.maximum(peak, 1e-20))
+            floor, lo, hi = self.processor.auto_range(power_db, peak_db)
+            for spin, value in ((self.spin_range_min, lo), (self.spin_range_max, hi)):
+                spin.blockSignals(True)
+                spin.setValue(int(round(value)))
+                spin.blockSignals(False)
+        else:
+            lo = float(self.spin_range_min.value())
+            hi = float(self.spin_range_max.value())
+            if hi <= lo:
+                hi = lo + 10
+            floor = float(np.median(power_db))
+
+        # plot data is drawn as log10(value): power gives 10 dB per scene unit
+        self.scene_manager.y_range = (lo / 10, hi / 10)
+        return x, power, np.sqrt(power)
+
     # ── Spectrogram ──────────────────────────────────────────
 
     def __clear_spectrogram(self):
@@ -175,10 +481,47 @@ class SpectrumDialogController(SendRecvDialog):
             self.ui.graphicsViewSpectrogram.sceneRect()
         )
 
+    def __waterfall_levels(self, spectrogram: Spectrogram):
+        """
+        Colour range of the waterfall: the black level sits near the noise
+        floor (followed automatically) and is moved by the sensitivity slider;
+        the contrast slider sets how many dB above it are full colour.
+        """
+        try:
+            stft = spectrogram.stft(spectrogram.samples[::1])
+            power = (
+                stft.real.astype(np.float32) ** 2 + stft.imag.astype(np.float32) ** 2
+            )
+            power = power[power > 0]
+            if len(power) > 0:
+                floor = float(10 * np.log10(np.median(power)))
+                if self._wf_floor is None or abs(floor - self._wf_floor) > 15:
+                    # first value or big change (gain, start): follow at once
+                    self._wf_floor = floor
+                else:
+                    # smooth so the colours do not flicker
+                    self._wf_floor += 0.1 * (floor - self._wf_floor)
+        except Exception:
+            pass
+        floor = self._wf_floor if self._wf_floor is not None else -80.0
+
+        sensitivity = self.slider_wf_sensitivity.value()  # 0..40 dB
+        contrast = self.slider_wf_contrast.value()  # 0..100
+        black = floor + 16 - sensitivity
+        dynamic = 90 - 0.75 * contrast  # 90 dB (soft) .. 15 dB (hard)
+        self._waterfall_range = (black, black + dynamic)
+        self.lbl_wf_levels.setText("{:.0f} .. {:.0f} dB".format(black, black + dynamic))
+        return self._waterfall_range
+
     def __update_spectrogram(self):
-        spectrogram = Spectrogram(self.device.data)
-        spectrogram.data_min = -80
-        spectrogram.data_max = 10
+        data = self.device.data
+        if self.averaged_view and self.processor.remove_dc and data is not None:
+            data = data.as_complex64() if hasattr(data, "as_complex64") else data
+            data = data - np.mean(data)
+        spectrogram = Spectrogram(data)
+        spectrogram.data_min, spectrogram.data_max = self.__waterfall_levels(
+            spectrogram
+        )
         scene = self.ui.graphicsViewSpectrogram.scene()
         pixmap = QPixmap.fromImage(spectrogram.create_spectrogram_image(transpose=True))
         item = scene.addPixmap(pixmap)
@@ -422,11 +765,10 @@ class SpectrumDialogController(SendRecvDialog):
 
     def __update_view(self):
         if super().update_view():
-            x, y = self.device.spectrum
+            x, y, magnitude = self.__compute_spectrum()
             if x is None or y is None:
                 return
 
-            # FFT display (original, untouched)
             self.scene_manager.scene.frequencies = x
             self.scene_manager.plot_data = y
             self.scene_manager.init_scene()
@@ -491,7 +833,7 @@ class SpectrumDialogController(SendRecvDialog):
             if len(iq) >= 2:
                 self.__update_time(iq)
                 self.__update_const(iq)
-                self.__update_mod(iq, x, y)
+                self.__update_mod(iq, x, magnitude)
 
     # ── Unchanged overrides ──────────────────────────────────
 
@@ -563,6 +905,7 @@ class SpectrumDialogController(SendRecvDialog):
         self.scene_manager.scene.center_freq = frequency
         self.scene_manager.clear_path()
         self.scene_manager.clear_peak()
+        self.processor.reset()
 
     @pyqtSlot()
     def on_start_clicked(self):

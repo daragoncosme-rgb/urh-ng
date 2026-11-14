@@ -15,7 +15,10 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QWidget,
     QProgressBar,
+    QComboBox,
 )
+
+from urh import settings
 
 from urh.awre.ProtocolMatcher import ProtocolMatch
 
@@ -25,8 +28,18 @@ class ProtocolMatchDialog(QDialog):
 
     match_selected = pyqtSignal(object)  # Emits the selected ProtocolMatch
 
+    # Filter entries: (label, categories shown or None for all)
+    FILTERS = [
+        ("Remote controls (gates, garages, car keys)", ("remote", "car key")),
+        ("Remote controls and alarms", ("remote", "car key", "security")),
+        ("Sensors, meters and TPMS", ("sensor", "meter", "tpms", "other")),
+        ("All devices", None),
+    ]
+    SETTINGS_KEY = "ProtocolMatchDialog/filter"
+
     def __init__(self, matches: list, parent=None):
         super().__init__(parent)
+        self.all_matches = matches
         self.matches = matches
         self.selected_match = None
         self.setWindowTitle("Auto Protocol Identification")
@@ -45,14 +58,34 @@ class ProtocolMatchDialog(QDialog):
         header.setWordWrap(True)
         layout.addWidget(header)
 
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Show:"))
+        self.combo_filter = QComboBox()
+        for label, _ in self.FILTERS:
+            self.combo_filter.addItem(label)
+        self.combo_filter.setCurrentIndex(
+            min(
+                max(settings.read(self.SETTINGS_KEY, 0, int), 0),
+                len(self.FILTERS) - 1,
+            )
+        )
+        self.combo_filter.setToolTip(
+            "Most of the database are sensors (weather stations, thermometers). "
+            "Show only the device types you are looking for."
+        )
+        self.combo_filter.currentIndexChanged.connect(self.on_filter_changed)
+        filter_row.addWidget(self.combo_filter)
+        filter_row.addStretch()
+        layout.addLayout(filter_row)
+
         # Splitter for table + details
         splitter = QSplitter(Qt.Orientation.Vertical)
 
         # Results table
         self.table = QTableWidget()
-        self.table.setColumnCount(4)
+        self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            ["Confidence", "Protocol Name", "Modulation", "Fields"]
+            ["Confidence", "Protocol Name", "Type", "Modulation", "Fields"]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -61,7 +94,7 @@ class ProtocolMatchDialog(QDialog):
             1, QHeaderView.ResizeMode.Stretch
         )
         self.table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.Stretch
+            4, QHeaderView.ResizeMode.Stretch
         )
         self.table.setAlternatingRowColors(True)
         self.table.currentCellChanged.connect(self.on_selection_changed)
@@ -94,7 +127,21 @@ class ProtocolMatchDialog(QDialog):
         btn_layout.addWidget(self.btn_cancel)
         layout.addLayout(btn_layout)
 
+    def on_filter_changed(self, index: int):
+        settings.write(self.SETTINGS_KEY, index)
+        self.populate()
+
     def populate(self):
+        categories = self.FILTERS[self.combo_filter.currentIndex()][1]
+        self.matches = [
+            m
+            for m in self.all_matches
+            if categories is None or getattr(m, "category", "other") in categories
+        ]
+        self.selected_match = None
+        self.btn_apply.setEnabled(False)
+        self.details_text.clear()
+        self.table.clearContents()
         self.table.setRowCount(len(self.matches))
         for row, match in enumerate(self.matches):
             # Confidence with color-coded progress bar
@@ -124,15 +171,24 @@ class ProtocolMatchDialog(QDialog):
             # Modulation
             mod = match.entry.get("modulation", "")
             mod_short = mod.replace("OOK_PULSE_", "OOK/").replace("FSK_PULSE_", "FSK/")
-            self.table.setItem(row, 2, QTableWidgetItem(mod_short))
+            self.table.setItem(row, 2, QTableWidgetItem(getattr(match, "category", "")))
+            self.table.setItem(row, 3, QTableWidgetItem(mod_short))
 
             # Fields
             fields = match.entry.get("fields", [])
             fields_str = ", ".join(f for f in fields if f != "model")
-            self.table.setItem(row, 3, QTableWidgetItem(fields_str))
+            self.table.setItem(row, 4, QTableWidgetItem(fields_str))
 
         self.table.resizeColumnToContents(0)
         self.table.resizeColumnToContents(2)
+        self.table.resizeColumnToContents(3)
+
+        hidden = len(self.all_matches) - len(self.matches)
+        if hidden and not self.matches:
+            self.details_text.setHtml(
+                f"No match of this type. {hidden} other matches are hidden: "
+                f"choose <b>All devices</b> to see them."
+            )
 
     def on_selection_changed(self, row, col, prev_row, prev_col):
         if 0 <= row < len(self.matches):

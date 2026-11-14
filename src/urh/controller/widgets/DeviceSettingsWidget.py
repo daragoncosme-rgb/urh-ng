@@ -1,12 +1,12 @@
 from statistics import median
 
 import numpy as np
-from PyQt6.QtCore import QRegularExpression, QTimer, pyqtSlot, pyqtSignal
+from PyQt6.QtCore import QRegularExpression, QTimer, pyqtSlot, pyqtSignal, Qt
 from PyQt6.QtGui import QRegularExpressionValidator, QIcon
 from PyQt6.QtWidgets import QWidget, QSpinBox, QLabel, QComboBox, QSlider
 
 from urh import settings
-from urh.dev import config
+from urh.dev import config, RadioPresets
 from urh.dev.BackendHandler import BackendHandler, Backends
 from urh.dev.VirtualDevice import VirtualDevice
 from urh.plugins.NetworkSDRInterface.NetworkSDRInterfacePlugin import (
@@ -40,6 +40,8 @@ class DeviceSettingsWidget(QWidget):
         self.__changing_device = False
         self.ui = Ui_FormDeviceSettings()
         self.ui.setupUi(self)
+        self.__applying_preset = False
+        self.__add_preset_row()
 
         self.__device = None  # type: VirtualDevice
 
@@ -84,11 +86,138 @@ class DeviceSettingsWidget(QWidget):
         self.ui.lineEditIP.setValidator(QRegularExpressionValidator(ip_regex))
 
         self.create_connects()
+        self.ui.comboBoxPreset.activated.connect(self.on_combo_box_preset_activated)
+        self.ui.spinBoxFreq.valueChanged.connect(self.on_spinbox_freq_value_changed)
         self.sync_gain_sliders()
+        self.update_preset_availability()
 
         # The dialog creates the device after this widget, so press the
         # "automatically detect" button once the window has been built.
         QTimer.singleShot(0, self.refresh_and_select_last_identifier)
+
+    # ------------------------------------------------------ radio presets
+
+    def __add_preset_row(self):
+        """Add a "Preset" combo box in a new row above the frequency."""
+        grid = self.ui.gridLayout
+        freq_row = grid.getItemPosition(grid.indexOf(self.ui.spinBoxFreq))[0]
+
+        # Move every row from the frequency on one row down
+        moved = []
+        for i in reversed(range(grid.count())):
+            row, col, row_span, col_span = grid.getItemPosition(i)
+            if row >= freq_row:
+                moved.append((grid.takeAt(i), row, col, row_span, col_span))
+        self.__moved_layouts = []  # keep Python references to moved layouts
+        for item, row, col, row_span, col_span in moved:
+            if item.widget() is not None:
+                grid.addWidget(item.widget(), row + 1, col, row_span, col_span)
+            elif item.layout() is not None:
+                layout = item.layout()
+                layout.setParent(None)
+                self.__moved_layouts.append(layout)
+                grid.addLayout(layout, row + 1, col, row_span, col_span)
+            else:
+                grid.addItem(item, row + 1, col, row_span, col_span)
+
+        self.ui.labelPreset = QLabel(self.tr("Preset:"), parent=self.ui.frame_2)
+        self.ui.comboBoxPreset = QComboBox(parent=self.ui.frame_2)
+        self.ui.comboBoxPreset.setToolTip(
+            self.tr(
+                "Set frequency, sample rate and bandwidth for common remote "
+                "controls and bands. Values are adapted to the selected device."
+            )
+        )
+        combo = self.ui.comboBoxPreset
+        combo.addItem(self.tr("Custom (choose a remote or band...)"), None)
+        group = None
+        for index, preset in enumerate(RadioPresets.PRESETS):
+            if preset.group != group:
+                group = preset.group
+                combo.addItem("--- " + group + " ---", None)
+                combo.model().item(combo.count() - 1).setEnabled(False)
+            combo.addItem("    " + preset.name, index)
+            combo.setItemData(
+                combo.count() - 1, preset.note, Qt.ItemDataRole.ToolTipRole
+            )
+        combo.setMaxVisibleItems(30)
+        grid.addWidget(self.ui.labelPreset, freq_row, 0, 1, 1)
+        grid.addWidget(combo, freq_row, 1, 1, 2)
+
+    def __device_conf(self, device_name: str) -> dict:
+        key = device_name if device_name in config.DEVICE_CONFIG else "Fallback"
+        return config.DEVICE_CONFIG[key]
+
+    def update_preset_availability(self):
+        """Disable presets the selected device cannot tune to."""
+        name = self.ui.cbDevice.currentText()
+        conf = self.__device_conf(name)
+        combo = self.ui.comboBoxPreset
+        for i in range(combo.count()):
+            index = combo.itemData(i)
+            if index is None:
+                continue
+            preset = RadioPresets.PRESETS[index]
+            supported = RadioPresets.adapt_to_device(preset, name, conf)[3]
+            combo.model().item(i).setEnabled(supported)
+        has_freq = "center_freq" in conf
+        self.ui.labelPreset.setVisible(has_freq)
+        combo.setVisible(has_freq)
+
+    @pyqtSlot(int)
+    def on_combo_box_preset_activated(self, combo_index: int):
+        index = self.ui.comboBoxPreset.itemData(combo_index)
+        if index is None or self.device is None:
+            return
+        preset = RadioPresets.PRESETS[index]
+        name = self.ui.cbDevice.currentText()
+        freq, sample_rate, bandwidth, supported = RadioPresets.adapt_to_device(
+            preset, name, self.__device_conf(name)
+        )
+        if not supported:
+            return
+
+        self.__applying_preset = True
+        try:
+            self.ui.spinBoxFreq.setValue(freq)
+            self.ui.spinBoxFreq.editingFinished.emit()
+
+            if self.ui.comboBoxSampleRate.isVisibleTo(self):
+                combo = self.ui.comboBoxSampleRate
+                rates = [combo.itemData(i) for i in range(combo.count())]
+                if rates:
+                    best = min(
+                        range(len(rates)), key=lambda i: abs(rates[i] - sample_rate)
+                    )
+                    if combo.currentIndex() == best:
+                        combo.currentIndexChanged.emit(best)
+                    else:
+                        combo.setCurrentIndex(best)
+            elif self.ui.spinBoxSampleRate.isVisibleTo(self):
+                self.ui.spinBoxSampleRate.setValue(sample_rate)
+                self.ui.spinBoxSampleRate.editingFinished.emit()
+
+            if (
+                self.ui.spinBoxBandwidth.isVisibleTo(self)
+                and self.ui.spinBoxBandwidth.isEnabled()
+                and not self.bw_sr_are_locked
+            ):
+                self.ui.spinBoxBandwidth.setValue(bandwidth)
+                self.ui.spinBoxBandwidth.editingFinished.emit()
+        finally:
+            self.__applying_preset = False
+
+        self.ui.comboBoxPreset.setToolTip(preset.note)
+
+    @pyqtSlot(float)
+    def on_spinbox_freq_value_changed(self, value: float):
+        # The frequency was changed by hand: the preset no longer applies
+        if self.__applying_preset or self.ui.comboBoxPreset.currentIndex() == 0:
+            return
+        index = self.ui.comboBoxPreset.currentData()
+        if index is not None and abs(RadioPresets.PRESETS[index].frequency - value) < 1:
+            return
+        self.ui.comboBoxPreset.setCurrentIndex(0)
 
     # ------------------------------------------- remember last used device
     # The device is remembered globally (shared by all windows); the device
@@ -374,7 +503,10 @@ class DeviceSettingsWidget(QWidget):
         prefix = self.rx_tx_prefix
         if prefix + "rf_gain" in conf:
             key = prefix + "rf_gain"
-            gain = conf[key][int(np.percentile(range(len(conf[key])), 25))]
+            gain = conf.get(
+                "default_" + key,
+                conf[key][int(np.percentile(range(len(conf[key])), 25))],
+            )
             self.ui.spinBoxGain.setValue(gain)
 
     def set_default_if_gain(self):
@@ -477,6 +609,20 @@ class DeviceSettingsWidget(QWidget):
                     self.ui.comboBoxSampleRate.setVisible(False)
 
         self.ui.btnLockBWSR.setVisible("sample_rate" in conf and "bandwidth" in conf)
+
+        # RTL-SDR gains are in tenths of a dB (librtlsdr units): 40 is 4 dB,
+        # not 40 dB. Without a hint the receiver was often left almost deaf.
+        if device_name in ("RTL-SDR", "RTL-TCP"):
+            self.ui.labelGain.setText(self.tr("Gain (0.1 dB):"))
+            self.ui.spinBoxGain.setToolTip(
+                self.tr(
+                    "RTL-SDR gain in tenths of a dB: 300 = 30 dB, 400 = 40 dB. "
+                    "Typical values: 250-450."
+                )
+            )
+        else:
+            self.ui.labelGain.setText(self.tr("Gain:"))
+            self.ui.spinBoxGain.setToolTip("")
 
         if self.device is not None:
             self.ui.labelSubdevice.setVisible(self.device.subdevice is not None)
@@ -822,6 +968,8 @@ class DeviceSettingsWidget(QWidget):
 
         self.sync_gain_sliders()
         self.set_bandwidth_status()
+        if hasattr(self.ui, "comboBoxPreset"):
+            self.update_preset_availability()
 
         self.ui.comboBoxDeviceIdentifier.clear()
 
