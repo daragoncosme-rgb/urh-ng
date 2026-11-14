@@ -80,6 +80,11 @@ When the auto-identifier matches a protocol, it selects the right cipher:
 - **Learning modes**: Simple, Normal, Secure, Magic XOR, FAAC
 - **Brute-force**: Single capture (fast, may have false positives) or dual capture (validates key)
 - **Key derivation**: From device key + serial to manufacturer key
+- **Code word decoder**: *Analyze Protocol -> KeeLoq code word decoder (PWM)* splits
+  each message into encrypted portion, serial number, button code, battery and
+  repeat flags and sends the selected rows to this toolkit. It is based on the
+  KeeLoq decoder for PulseView by Andrea Orazi
+  ([rzondr/KeeLoq_decoder](https://github.com/rzondr/KeeLoq_decoder), GPL v2+).
 
 ## How It Works
 

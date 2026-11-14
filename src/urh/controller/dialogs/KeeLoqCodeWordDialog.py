@@ -90,6 +90,18 @@ class KeeLoqCodeWordDialog(QDialog):
         self.lbl_hint.setWordWrap(True)
         layout.addWidget(self.lbl_hint)
 
+        self.lbl_credit = QLabel(
+            self.tr(
+                "Based on the KeeLoq decoder for PulseView by Andrea Orazi "
+                "(<a href='https://github.com/rzondr/KeeLoq_decoder'>"
+                "github.com/rzondr/KeeLoq_decoder</a>, GPL v2+)."
+            )
+        )
+        self.lbl_credit.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_credit.setOpenExternalLinks(True)
+        self.lbl_credit.setWordWrap(True)
+        layout.addWidget(self.lbl_credit)
+
         buttons = QHBoxLayout()
         self.btn_toolkit = QPushButton(self.tr("Send to Crypto Toolkit"))
         self.btn_toolkit.setToolTip(

@@ -1,9 +1,14 @@
 """
 KeeLoq code word decoder for demodulated (TE-level) bits.
 
-Adapted from the PulseView/sigrok "KeeLoq CodeWord Decoder" by Andrea Orazi
-(https://github.com/rzondr/KeeLoq_decoder, GPL v2 or later). The original works
-on a logic analyzer trace; here it works on the bits URH already demodulated.
+Based on the PulseView/sigrok "KeeLoq CodeWord Decoder"
+  Copyright (C) 2024 Andrea Orazi <andrea.orazi@gmail.com> (GitHub: rzondr)
+  https://github.com/rzondr/KeeLoq_decoder
+  licensed under the GNU General Public License, version 2 or (at your option)
+  any later version.
+The code word structure, timing and field layout come from that decoder. The
+original works on a logic analyzer trace; this adaptation works on the bits
+URH already demodulated, and was rewritten for that purpose.
 
 A KeeLoq transmission (HCS200/300/301...) is PWM keyed:
 

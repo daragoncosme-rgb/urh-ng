@@ -800,9 +800,10 @@ class MainController(QMainWindow):
             "&lt;<a href='mailto:andreas.noack@hochschule-stralsund.de'>"
             "andreas.noack@hochschule-stralsund.de</a>&gt;</li>"
             "</ul>"
-            "<b>Data sources:</b> rtl_433, Flipper-ARF, ProtoPirate".format(
-                version.VERSION
-            )
+            "<b>Data sources:</b> rtl_433, Flipper-ARF, ProtoPirate<br />"
+            "<b>Based on:</b> KeeLoq decoder for PulseView by Andrea Orazi "
+            "(<a href='https://github.com/rzondr/KeeLoq_decoder'>"
+            "rzondr/KeeLoq_decoder</a>, GPL v2+)".format(version.VERSION)
         )
 
         QMessageBox.about(self, self.tr("About URH-NG"), self.tr(descr))

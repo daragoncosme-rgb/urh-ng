@@ -56,3 +56,15 @@
 - **[Flipper-ARF](https://github.com/D4C1-Labs/Flipper-ARF)** -- 30 automotive RF protocols (car keys, gates, alarms)
 - **[ProtoPirate](https://github.com/RocketGod-git/ProtoPirate)** -- 4 additional automotive protocols
 - **[HydraSDR](https://github.com/hydrasdr/hydrasdr-host)** -- HydraSDR host library
+
+## Third-party code
+
+- **Andrea Orazi** -- author of the KeeLoq decoder for PulseView
+  - GitHub: [@rzondr](https://github.com/rzondr)
+  - Project: https://github.com/rzondr/KeeLoq_decoder (GPL v2 or later)
+  - The *KeeLoq code word decoder (PWM)* in the Analyze Protocol menu
+    (`src/urh/util/KeeLoqPWM.py`) is based on it: code word structure
+    (preamble, header, 66-bit data portion), TE timing and field layout
+    (encrypted portion, serial number, button code, V-Low, RPT).
+  - HCS301 support in that decoder was contributed to the original project by
+    Tobias Rothfelder.

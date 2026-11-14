@@ -157,6 +157,10 @@ All notable changes to URH-NG are documented here.
 - Applied `black` formatting so CI stays green.
 
 ### Credits
+The KeeLoq code word decoder (PWM) is based on the PulseView decoder by
+**Andrea Orazi** ([@rzondr](https://github.com/rzondr),
+[rzondr/KeeLoq_decoder](https://github.com/rzondr/KeeLoq_decoder), GPL v2+).
+
 Thanks to the contributors whose pull requests this release builds on:
 
 - **[@wyattearp](https://github.com/wyattearp)** — `pyproject.toml` build

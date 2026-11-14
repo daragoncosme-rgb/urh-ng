@@ -216,6 +216,11 @@ URH was originally created by **Johannes Pohl** ([@jopohl](https://github.com/jo
 
 URH-NG is maintained by **Sebastien Dudek** at [PentHertz](https://penthertz.com) ([@FlUxIuS](https://github.com/FlUxIuS)).
 
+The KeeLoq code word decoder (*Analyze Protocol -> KeeLoq code word decoder (PWM)*)
+is based on the PulseView decoder by **Andrea Orazi**
+([@rzondr](https://github.com/rzondr),
+[rzondr/KeeLoq_decoder](https://github.com/rzondr/KeeLoq_decoder), GPL v2 or later).
+
 See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list of contributions.
 
 ## Articles
