@@ -13,7 +13,13 @@ AppPublisher=PentHertz
 AppPublisherURL=https://github.com/PentHertz/urh-ng
 AppSupportURL=https://github.com/PentHertz/urh-ng
 AppUpdatesURL=https://github.com/PentHertz/urh-ng
-DefaultDirName={commonpf}\URH-NG
+; Per-user install by default (%LOCALAPPDATA%\Programs\URH-NG): no Windows
+; permission (UAC) prompt. "dialog" / /ALLUSERS still lets an administrator
+; install it for all users in Program Files.
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog commandline
+UsePreviousPrivileges=no
+DefaultDirName={autopf}\URH-NG
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=..\dist
@@ -32,8 +38,8 @@ Source: "..\pyinstaller\urh\*"; DestDir: "{app}"; Flags: ignoreversion recursesu
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
-Name: "{commonprograms}\URH-NG"; Filename: "{app}\urh.exe"
-Name: "{commondesktop}\URH-NG"; Filename: "{app}\urh.exe"; Tasks: desktopicon
+Name: "{autoprograms}\URH-NG"; Filename: "{app}\urh.exe"
+Name: "{autodesktop}\URH-NG"; Filename: "{app}\urh.exe"; Tasks: desktopicon
 
 [Run]
 ; Install the bundled decoders into the user's %APPDATA%\urh (only when the

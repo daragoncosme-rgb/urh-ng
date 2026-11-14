@@ -61,6 +61,11 @@ All notable changes to URH-NG are documented here.
   menu entry. The decodings are reloaded right away.
 
 ### Changed
+- **The Windows installer no longer asks for administrator permission (UAC).**
+  It installs for the current user in `%LOCALAPPDATA%\Programs\URH-NG` by
+  default, with Start menu and desktop shortcuts for that user. An
+  administrator can still choose to install for all users in `Program Files`
+  (installer dialog, or `/ALLUSERS` on the command line).
 - The Windows installer uses its own identity (name "URH-NG", new AppId,
   `Program Files\URH-NG`, `URH-NG-<version>-<arch>.exe`). It previously reused
   the AppId of the original Universal Radio Hacker, so installing or
