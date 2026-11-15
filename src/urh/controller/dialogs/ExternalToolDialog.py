@@ -257,12 +257,18 @@ class ExternalToolDialog(QDialog):
         ExternalTool.set_final_parameters(self.edit_final_params.text())
         args = self._build_arguments()
 
-        # QProcess (CreateProcess on Windows) cannot run a .bat/.cmd script
-        # directly, only a real executable: run it through cmd.exe instead.
-        if os.path.splitext(path)[1].lower() in (".bat", ".cmd"):
-            program, program_args = "cmd.exe", ["/c", path] + args
-        else:
-            program, program_args = path, args
+        # Always launch through "cmd /c start", for two reasons:
+        # - QProcess (CreateProcess on Windows) cannot run a .bat/.cmd script
+        #   directly, only a real executable.
+        # - URH-NG itself is a windowed (GUI-subsystem, no console) build, so
+        #   a child process started directly from it inherits its hidden
+        #   window state and runs with no visible window, even a console
+        #   .exe. "start" opens a fresh console with normal visibility,
+        #   regardless of what started it. The empty "" after start is a
+        #   required placeholder for the new window's title (otherwise,
+        #   start treats the first quoted argument as the title).
+        program = "cmd.exe"
+        program_args = ["/c", "start", "", path] + args
 
         started = self._start_detached(program, program_args, os.path.dirname(path))
         if isinstance(started, tuple):

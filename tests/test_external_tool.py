@@ -104,7 +104,7 @@ class TestExternalToolDialog(QtTestCase):
         )
         dialog.close()
 
-    def test_bat_script_is_run_through_cmd_exe(self):
+    def test_bat_script_is_run_through_cmd_start(self):
         valid = _FakeMessage(_code_word_bits(0xA1B2C3D4, 0x0FFDAE3, 0b0010))
         dialog = ExternalToolDialog([valid])
         dialog.edit_path.setText(__file__.replace(".py", ".bat"))  # any path, need not exist
@@ -118,13 +118,17 @@ class TestExternalToolDialog(QtTestCase):
 
         self.assertEqual(started.call_args[0][0], "cmd.exe")
         self.assertEqual(
-            started.call_args[0][1][:2], ["/c", dialog.edit_path.text()]
+            started.call_args[0][1][:4],
+            ["/c", "start", "", dialog.edit_path.text()],
         )
         self.assertIn("A1B2C3D4:0FFDAE3:S0", started.call_args[0][1])
         self.assertEqual(started.call_args[0][1][-2:], ["-b", "-t91"])
         dialog.close()
 
-    def test_exe_is_run_directly(self):
+    def test_exe_is_also_run_through_cmd_start_so_its_window_is_visible(self):
+        # URH-NG is a windowed (no-console) build, so a child process started
+        # directly from it would otherwise inherit its hidden window state
+        # and show no window at all, even for a console .exe.
         valid = _FakeMessage(_code_word_bits(0xA1B2C3D4, 0x0FFDAE3, 0b0010))
         dialog = ExternalToolDialog([valid])
         dialog.edit_path.setText(__file__.replace(".py", ".exe"))
@@ -134,7 +138,11 @@ class TestExternalToolDialog(QtTestCase):
         ) as started:
             dialog._on_run()
 
-        self.assertEqual(started.call_args[0][0], dialog.edit_path.text())
+        self.assertEqual(started.call_args[0][0], "cmd.exe")
+        self.assertEqual(
+            started.call_args[0][1][:4],
+            ["/c", "start", "", dialog.edit_path.text()],
+        )
         dialog.close()
 
 

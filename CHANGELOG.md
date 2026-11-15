@@ -12,7 +12,10 @@ All notable changes to URH-NG are documented here.
   it asks where the program is and remembers the path; a "Change..." button
   lets you pick a different one later. "Extra parameters" are added before
   the checked messages' arguments and "Final parameters" (default `-b -t91`)
-  after them, both editable and remembered too.
+  after them, both editable and remembered too. The program always runs
+  through `cmd /c start`, so its window is visible: URH-NG itself has no
+  console, and a program launched directly from it would otherwise inherit
+  that hidden window state and show nothing at all.
 - **KeeLoq code word decoder (PWM)** in the *Analyze Protocol* menu. It decodes
   the messages of the protocol table as KeeLoq code words (HCS200/300/301):
   encrypted portion, serial number, button code (S3/S0/S1/S2), battery and
